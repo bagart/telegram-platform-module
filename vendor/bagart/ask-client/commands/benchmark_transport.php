@@ -1,0 +1,966 @@
+<?php
+
+declare(strict_types=1);
+
+use BAGArt\ASKClient\Dto\ASKHttpRequest;
+use BAGArt\ASKClient\Transport\HttpTransportRegistry;
+use BAGArt\AsyncKernel\AsyncKernel;
+use BAGArt\AsyncKernel\Daemons\ASKFnDaemon;
+use BAGArt\AsyncKernel\Daemons\ASKFnDaemonContext;
+use BAGArt\AsyncKernel\Exceptions\ASKTechnicalException;
+use BAGArt\AsyncKernel\Promise\ASKPromiseResolver;
+use BAGArt\AsyncKernel\Wrappers\ASKLogWrapper;
+
+/**
+ * ASKClient async transport benchmark — master/worker architecture.
+ *
+ * Tests how each transport handles N concurrent requests to different domains.
+ * All sources from currency-sources.php are fetched in chunks limited by
+ * --concurrent. The metric is total time to complete all sources and RPS.
+ *
+ * MASTER MODE (no --transport):
+ *   Spawns all workers in parallel. Each worker runs in isolation.
+ *
+ * WORKER MODE (--transport=<name>):
+ *   Runs the benchmark for a single transport, outputs JSON result to stdout.
+ *
+ * Usage:
+ *   php commands/benchmark_transport.php                        # master: spawns workers
+ *   php commands/benchmark_transport.php --transport=guzzle     # worker: single transport
+ *   php commands/benchmark_transport.php --concurrent=20
+ *   php commands/benchmark_transport.php --runs=3
+ *   php commands/benchmark_transport.php --format=json          # master outputs JSON
+ *   php commands/benchmark_transport.php --help
+ */
+
+require_once __DIR__.'/../../../../vendor/autoload.php';
+
+$definedOptions = [
+    'transport::',
+    'runs::',
+    'format::',
+    'timeout::',
+    'seed::',
+    'warmup::',
+    'keep-alive::',
+    'help',
+    'list',
+    'xhprof::',
+    'xhprof_dir::',
+    'clear'
+];
+
+$options = getopt('', $definedOptions);
+
+if (isset($options['help'])) {
+    $transports = implode(', ', HttpTransportRegistry::build()->types());
+    echo "Usage:
+php commands/benchmark_transport.php                        # master: spawns workers
+php commands/benchmark_transport.php --transport=guzzle     # worker: single transport
+php commands/benchmark_transport.php --runs=1               # repeats, median kept
+php commands/benchmark_transport.php --format=json          # master outputs JSON
+php commands/benchmark_transport.php --timeout=600          # worker timeout in seconds
+php commands/benchmark_transport.php --warmup=10            # fire 10 warmup requests before timing
+php commands/benchmark_transport.php --xhprof               # master: enable XHProf profiling
+php commands/benchmark_transport.php --clear                # remove XHProf profiles directory
+php commands/benchmark_transport.php --list                 # list available transports
+
+Options:
+  --transport=<type>                   one of: {$transports} (default: master)
+  --runs=N                             repeats, median kept (default: 1)
+  --format=<text|json>                 output format (default: text)
+  --timeout=N                          worker timeout in seconds (default: 120)
+  --seed=N                             worker RNG seed (master auto-assigns per transport)
+  --warmup=N                           fire N requests, drain, reset metrics, then time (default: 0)
+  --keep-alive=0|1                     ask-socket keep-alive override for A/B (default: 1)
+  --xhprof                             enable XHProf profiling (implies --format=json)
+  --xhprof_dir=<path>                  XHProf base directory (default: storage/app/tmp/xhprof)
+  --clear                              remove XHProf benchmark-transport directory
+  --help
+  --list
+
+All sources from currency-sources.php are fetched simultaneously.
+The metric is total time to complete all requests and RPS.
+";
+    exit(0);
+}
+
+if (isset($options['list'])) {
+    echo implode(PHP_EOL, HttpTransportRegistry::build()->types()).PHP_EOL;
+    exit(0);
+}
+
+// --clear: remove xhprof/benchmark-transport directory
+if (isset($options['clear'])) {
+    $xhprofClearBase = (string)($options['xhprof_dir'] ?? dirname(__DIR__, 4).'/storage/app/tmp/xhprof');
+    $xhprofClearDir = $xhprofClearBase.'/benchmark-transport';
+    if (!is_dir($xhprofClearDir)) {
+        echo "Nothing to clear (not found: {$xhprofClearDir})\n";
+    } else {
+        $it = new RecursiveIteratorIterator(
+            new RecursiveDirectoryIterator($xhprofClearDir, RecursiveDirectoryIterator::SKIP_DOTS),
+            RecursiveIteratorIterator::CHILD_FIRST,
+        );
+        foreach ($it as $f) {
+            $f->isDir() ? @rmdir((string)$f) : @unlink((string)$f);
+        }
+        @rmdir($xhprofClearDir);
+        echo "Cleared: {$xhprofClearDir}\n";
+    }
+    exit(0);
+}
+
+$runs = max(1, (int)($options['runs'] ?? 1));
+$outputFormat = (string)($options['format'] ?? 'text');
+$workerTimeout = max(10, (int)($options['timeout'] ?? 6000));
+$warmup = max(0, (int)($options['warmup'] ?? 0));
+
+// --keep-alive override (only meaningful for ask-socket). Default keeps the lib default (true).
+$keepAliveOpt = $options['keep-alive'] ?? null;
+$keepAlive = $keepAliveOpt === null ? null : (bool)(int)$keepAliveOpt;
+
+$registry = HttpTransportRegistry::build();
+$transportFilter = (string)($options['transport'] ?? '');
+
+if ($transportFilter === '') {
+    $transports = $registry->types();
+    echo "Benchmark initiated for: ".implode(', ', $transports).PHP_EOL;
+
+    $phpBin = PHP_BINARY;
+    $script = __FILE__;
+
+    $tmpDir = sys_get_temp_dir().'/askbench-'.date('Y-m-d_H-i-s').'-'.bin2hex(random_bytes(8));
+    if (!mkdir($tmpDir, 0700, true) && !is_dir($tmpDir)) {
+        throw new ASKTechnicalException("Directory $tmpDir was not created");
+    }
+
+    $xhprofTimestamp = '';
+    $xhprofDir = '';
+    if (isset($options['xhprof'])) {
+        $xhprofTimestamp = $options['xhprof'] !== false ? $options['xhprof'] : date('Y-m-d_H-i-s');
+        $xhprofBaseDir = (string)($options['xhprof_dir'] ?? dirname(__DIR__, 4).'/storage/app/tmp/xhprof');
+        $xhprofDir = $xhprofBaseDir.'/benchmark-transport';
+        if (!is_dir($xhprofDir)) {
+            mkdir($xhprofDir, 0700, true);
+        }
+        echo "XHProf enabled, profiles → {$xhprofDir}/".PHP_EOL;
+    }
+
+    $processes = [];
+    foreach ($transports as $name) {
+        $outPath = $tmpDir.'/'.preg_replace('/[^a-z0-9_-]/i', '_', $name).'.out';
+        $errPath = $tmpDir.'/'.preg_replace('/[^a-z0-9_-]/i', '_', $name).'.err';
+
+        $extraArgs = $xhprofTimestamp !== ''
+            ? ' --xhprof='.escapeshellarg($xhprofTimestamp).' --xhprof_dir='.escapeshellarg($xhprofBaseDir)
+            : '';
+        if ($warmup > 0) {
+            $extraArgs .= ' --warmup='.$warmup;
+        }
+        if ($keepAlive !== null) {
+            $extraArgs .= ' --keep-alive='.($keepAlive ? '1' : '0');
+        }
+
+        $pipes = [];
+        $process = @proc_open(
+            sprintf(
+                '%s %s --transport=%s --runs=%d --seed=%d%s',
+                escapeshellarg($phpBin),
+                escapeshellarg($script),
+                escapeshellarg($name),
+                $runs,
+                crc32($name),
+                $extraArgs,
+            ),
+            [
+                0 => ['pipe', 'r'],
+                1 => ['file', $outPath, 'w'],
+                2 => ['file', $errPath, 'w'],
+            ],
+            $pipes
+        );
+        if (!is_resource($process)) {
+            $processes[$name] = ['error' => 'Failed to spawn process'];
+            continue;
+        }
+        fclose($pipes[0]);
+
+        $outFh = @fopen($outPath, 'rb');
+        $errFh = @fopen($errPath, 'rb');
+        if ($outFh === false || $errFh === false) {
+            @proc_terminate($process, 9);
+            @proc_close($process);
+            $processes[$name] = ['error' => 'Failed to open read handle on temp output'];
+            continue;
+        }
+        fseek($outFh, 0, SEEK_END);
+        fseek($errFh, 0, SEEK_END);
+
+        $processes[$name] = [
+            'process' => $process,
+            'out_path' => $outPath,
+            'err_path' => $errPath,
+            'out_fh' => $outFh,
+            'err_fh' => $errFh,
+            'stdout_buf' => '',
+            'stderr_buf' => '',
+            'start' => microtime(true),
+            'done' => false,
+            'timed_out' => false,
+            'retried' => false,
+            'exit_code' => null,
+        ];
+    }
+
+    $globalStart = microtime(true);
+
+    $drainFile = static function ($fh): string {
+        if (!is_resource($fh)) {
+            return '';
+        }
+
+        return (string)@stream_get_contents($fh);
+    };
+
+    while (true) {
+        $elapsed = microtime(true) - $globalStart;
+        if ($elapsed > $workerTimeout) {
+            foreach ($processes as $name => &$p) {
+                if (!$p['done']) {
+                    @proc_terminate($p['process'], 9);
+                    $p['stdout_buf'] .= $drainFile($p['out_fh']);
+                    $p['stderr_buf'] .= $drainFile($p['err_fh']);
+                    @fclose($p['out_fh']);
+                    @fclose($p['err_fh']);
+                    @proc_close($p['process']);
+                    $p['done'] = true;
+                    $p['timed_out'] = true;
+                }
+            }
+            unset($p);
+            break;
+        }
+
+        foreach ($processes as $name => &$p) {
+            if ($p['done'] || !isset($p['process']) || !is_resource($p['process'])) {
+                continue;
+            }
+            $p['stdout_buf'] .= $drainFile($p['out_fh']);
+            $p['stderr_buf'] .= $drainFile($p['err_fh']);
+
+            $status = @proc_get_status($p['process']);
+            if ($status === false || !$status['running']) {
+                $p['stdout_buf'] .= $drainFile($p['out_fh']);
+                $p['stderr_buf'] .= $drainFile($p['err_fh']);
+                @fclose($p['out_fh']);
+                @fclose($p['err_fh']);
+                @proc_close($p['process']);
+                $p['done'] = true;
+                $p['exit_code'] = $status ? $status['exitcode'] : -1;
+                $p['wall'] = microtime(true) - $p['start'];
+            }
+        }
+        unset($p);
+
+        $allDone = true;
+        foreach ($processes as $p) {
+            if (!$p['done'] && !isset($p['error'])) {
+                $allDone = false;
+                break;
+            }
+        }
+        if ($allDone) {
+            break;
+        }
+    }
+
+    // Collect geo data before cleanup
+    $geoData = collectGeoData($transports, $tmpDir);
+
+    // Cleanup temp files after all workers have drained and closed.
+    foreach ($processes as $p) {
+        if (isset($p['out_path'])) {
+            @unlink($p['out_path']);
+        }
+        if (isset($p['err_path'])) {
+            @unlink($p['err_path']);
+        }
+    }
+    @rmdir($tmpDir);
+
+    $results = [];
+    $allPerUrl = [];
+    $retries = [];
+
+    foreach ($processes as $name => $p) {
+        if (isset($p['error'])) {
+            $results[$name] = ['error' => $p['error']];
+            continue;
+        }
+
+        if ($p['timed_out'] ?? false) {
+            $results[$name] = ['error' => "Timed out after {$workerTimeout}s"];
+            continue;
+        }
+
+        $output = trim($p['stdout_buf']);
+        $stderr = trim($p['stderr_buf']);
+
+        if ($output === '') {
+            $results[$name] = [
+                'error' => 'No output. Stderr: '.substr($stderr, 0, 200),
+            ];
+            continue;
+        }
+
+        $workerResult = json_decode($output, true);
+
+        if (!is_array($workerResult) || !isset($workerResult['concurrent_time'])) {
+            $results[$name] = ['error' => 'Invalid JSON: '.substr($output, 0, 200)];
+            continue;
+        }
+
+        $mem = $workerResult['peak_memory'] ?? 0;
+        $ok = $workerResult['ok'] ?? 0;
+        $fail = $workerResult['fail'] ?? 0;
+
+        $results[$name] = [
+            'concurrent_time' => $workerResult['concurrent_time'],
+            'rps' => $workerResult['rps'] ?? 0.0,
+            'ok' => $ok,
+            'fail' => $fail,
+            'total' => $workerResult['total'] ?? ($ok + $fail),
+            'wall' => $p['wall'] ?? 0,
+            'peak_memory' => $mem,
+            'peak_memory_delta' => $workerResult['peak_memory_delta'] ?? null,
+            'baseline_memory' => $workerResult['baseline_memory'] ?? null,
+            'fairness' => $workerResult['fairness'] ?? 0,
+            'cv' => $workerResult['cv'] ?? 0.0,
+            'per_url' => $workerResult['per_url'] ?? [],
+            'metrics' => $workerResult['metrics'] ?? [],
+            'phase_by_url' => $workerResult['phase_by_url'] ?? [],
+            'stderr' => $stderr,
+            'error' => null,
+        ];
+
+        if ($workerResult['retried'] ?? false) {
+            $retries[] = $name;
+        }
+    }
+
+    $urlData = [];
+    foreach ($results as $transport => $r) {
+        if ($r['error'] !== null) {
+            continue;
+        }
+        foreach ($r['per_url'] as $entry) {
+            $key = $entry['url'];
+            if (!isset($urlData[$key])) {
+                $urlData[$key] = ['name' => $entry['name'], 'url' => $entry['url'], 'times' => []];
+            }
+            $urlData[$key]['times'][$transport] = $entry['avg_time'];
+        }
+    }
+
+    $risks = [];
+    foreach ($urlData as $key => $data) {
+        $times = $data['times'];
+        if (count($times) < 2) {
+            continue;
+        }
+        $max = max($times);
+        $min = min($times);
+        if ($min > 0 && ($max / $min) > 1.5) {
+            $risks[] = [
+                'name' => $data['name'],
+                'url' => $data['url'],
+                'times' => $times,
+                'ratio' => $max / $min,
+                'max_transport' => array_search($max, $times, true),
+                'min_transport' => array_search($min, $times, true),
+            ];
+        }
+    }
+    usort($risks, fn ($a, $b) => $b['ratio'] <=> $a['ratio']);
+    $risks = array_slice($risks, 0, 5);
+
+    // Exclude risky URLs from all transports' aggregate scoring
+    $riskyKeys = [];
+    foreach ($risks as $risk) {
+        $riskyKeys[$risk['url']] = true;
+    }
+
+    if ($riskyKeys !== []) {
+        foreach ($results as $transport => &$r) {
+            if ($r['error'] !== null) {
+                continue;
+            }
+            $filtered = array_values(
+                array_filter(
+                    $r['per_url'],
+                    static fn ($entry) => !isset($riskyKeys[$entry['url']]),
+                )
+            );
+            $r['per_url'] = $filtered;
+
+            $okSum = 0;
+            $totalSamples = 0;
+            $weightedSum = 0.0;
+            foreach ($filtered as $entry) {
+                $s = $entry['samples'];
+                $okSum += $s;
+                $totalSamples += $s;
+                $weightedSum += $entry['avg_time'] * $s;
+            }
+            $r['ok'] = $okSum;
+            $r['total'] = $okSum + $r['fail'];
+            $r['rps'] = $r['concurrent_time'] > 0 ? round($r['total'] / $r['concurrent_time'], 2) : 0.0;
+
+            if ($totalSamples > 0 && $weightedSum > 0) {
+                $mean = $weightedSum / $totalSamples;
+                $varSum = 0.0;
+                $maxTime = 0.0;
+                foreach ($filtered as $entry) {
+                    $diff = $entry['avg_time'] - $mean;
+                    $varSum += $entry['samples'] * $diff * $diff;
+                    if ($entry['avg_time'] > $maxTime) {
+                        $maxTime = $entry['avg_time'];
+                    }
+                }
+                $stddev = sqrt($varSum / $totalSamples);
+                $cv = $maxTime > 0 ? $stddev / $maxTime : 0.0;
+                $r['cv'] = round($cv, 4);
+                $successRate = $r['total'] > 0 ? $okSum / $r['total'] : 0.0;
+                $consistencyPts = max(0, 50 * (1 - $cv / 1.0));
+                $reliabilityPts = $successRate * 50;
+                $r['fairness'] = (int)round($consistencyPts + $reliabilityPts);
+            }
+        }
+        unset($r);
+    }
+
+    // XHProf: rename .tmp → RATIO_name.xhprof
+    $resultRatio = 1.0;
+    if ($xhprofTimestamp !== '') {
+        $bestTime = INF;
+        foreach ($results as $r) {
+            if ($r['error'] === null && $r['concurrent_time'] > 0 && $r['concurrent_time'] < $bestTime) {
+                $bestTime = $r['concurrent_time'];
+            }
+        }
+
+        foreach ($results as $name => $r) {
+            if ($r['error'] !== null) {
+                continue;
+            }
+            $tmpPath = $xhprofDir.'/'.$xhprofTimestamp.'_'.$name.'.xhprof.tmp';
+            $ratio = $bestTime > 0 && $bestTime < INF ? round($r['concurrent_time'] / $bestTime, 2) : 1;
+            $finalPath = $xhprofDir.'/'.$xhprofTimestamp.'_'.sprintf('%.2f', $ratio).'_'.$name.'.xhprof';
+            if (file_exists($tmpPath)) {
+                rename($tmpPath, $finalPath);
+            }
+            if ($ratio > $resultRatio) {
+                $resultRatio = $ratio;
+            }
+        }
+
+        // Clean up leftover .tmp files
+        foreach (glob($xhprofDir.'/'.$xhprofTimestamp.'_*.xhprof.tmp') ?: [] as $tmpFile) {
+            @unlink($tmpFile);
+        }
+    }
+
+    if ($outputFormat === 'json') {
+        $jsonOutput = [
+            'results' => $results,
+            'risks' => $risks,
+            'retries' => $retries,
+            'geo' => $geoData,
+        ];
+        if ($xhprofTimestamp !== '') {
+            $resultPath = $xhprofDir.'/'.$xhprofTimestamp.'_'.sprintf('%.2f', $resultRatio).'_result.json';
+            file_put_contents($resultPath, json_encode($jsonOutput, JSON_PRETTY_PRINT | JSON_THROW_ON_ERROR));
+            $geoPath = $xhprofDir.'/'.$xhprofTimestamp.'_'.sprintf('%.2f', $resultRatio).'__geo.json';
+            file_put_contents($geoPath, json_encode($geoData, JSON_PRETTY_PRINT | JSON_THROW_ON_ERROR));
+            $jsonOutput['result_path'] = $resultPath;
+            $jsonOutput['geo_path'] = $geoPath;
+            $jsonOutput['xhprof_dir'] = $xhprofDir;
+        }
+        echo json_encode($jsonOutput, JSON_PRETTY_PRINT | JSON_THROW_ON_ERROR)."\n";
+        exit(0);
+    }
+
+    // Save result.json and geo.json for text format too when xhprof is enabled
+    if ($xhprofTimestamp !== '') {
+        $resultPath = $xhprofDir.'/'.$xhprofTimestamp.'_'.sprintf('%.2f', $resultRatio).'_result.json';
+        file_put_contents($resultPath, json_encode([
+            'results' => $results,
+            'risks' => $risks,
+            'retries' => $retries,
+        ], JSON_PRETTY_PRINT | JSON_THROW_ON_ERROR));
+        $geoPath = $xhprofDir.'/'.$xhprofTimestamp.'_'.sprintf('%.2f', $resultRatio).'__geo.json';
+        file_put_contents($geoPath, json_encode($geoData, JSON_PRETTY_PRINT | JSON_THROW_ON_ERROR));
+    }
+
+    if ($geoData !== []) {
+        echo "\n--- Geo location ---\n";
+        foreach ($geoData as $transport => $geo) {
+            if (isset($geo['error'])) {
+                echo "  {$transport}: ERROR {$geo['error']}\n";
+            } else {
+                echo "  {$transport}: {$geo['country']}, {$geo['isp']}".(isset($geo['ip']) ? " ({$geo['ip']})" : '')."\n";
+            }
+        }
+    }
+
+    require __DIR__.'/includes/benchmark_transport/result.php';
+    render_benchmark_results($results, $retries, $risks, $runs);
+
+    if ($xhprofTimestamp !== '') {
+        echo "\nXHProf profiles: {$xhprofDir}/\n";
+        echo "Result file: {$resultPath}\n";
+    }
+
+    echo "\nDone.\n";
+    exit(0);
+}
+
+/**
+ * Collect IP geolocation data by running ip_geolocation for each transport.
+ *
+ * @param  list<string>  $transports
+ * @return array<string, array{ip?: string, country?: string, isp?: string, error?: string}>
+ */
+function collectGeoData(array $transports, string $tmpDir): array
+{
+    $geoData = [];
+    $phpBin = PHP_BINARY;
+    $geoScript = __DIR__.'/ip_geolocation.php';
+
+    foreach ($transports as $name) {
+        $safeName = preg_replace('/[^a-z0-9_-]/i', '_', $name);
+        $outPath = $tmpDir.'/'.$safeName.'__geo.out';
+        $errPath = $tmpDir.'/'.$safeName.'__geo.err';
+
+        $pipes = [];
+        $process = @proc_open(
+            sprintf(
+                '%s %s --json --no-ip --transport=%s',
+                escapeshellarg($phpBin),
+                escapeshellarg($geoScript),
+                escapeshellarg($name),
+            ),
+            [
+                0 => ['pipe', 'r'],
+                1 => ['file', $outPath, 'w'],
+                2 => ['file', $errPath, 'w'],
+            ],
+            $pipes
+        );
+
+        if (!is_resource($process)) {
+            $geoData[$name] = ['error' => 'Failed to spawn geo process'];
+            continue;
+        }
+        fclose($pipes[0]);
+        $exitCode = proc_close($process);
+
+        $output = trim((string)@file_get_contents($outPath));
+        @unlink($outPath);
+        @unlink($errPath);
+
+        if ($exitCode !== 0 || $output === '') {
+            $geoData[$name] = ['error' => "Geo process failed (exit: {$exitCode})"];
+            continue;
+        }
+
+        $decoded = json_decode($output, true);
+        if (!is_array($decoded)) {
+            $geoData[$name] = ['error' => 'Invalid geo JSON response'];
+            continue;
+        }
+
+        $geoData[$name] = $decoded;
+    }
+
+    return $geoData;
+}
+
+if (!$registry->has($transportFilter)) {
+    fwrite(STDERR, "Unknown transport: {$transportFilter}\n");
+    exit(2);
+}
+
+// Worker: build transport. For ask-socket, apply the --keep-alive override when present so
+// A/B comparison is possible without editing the harness. Other transports ignore it.
+$workerKeepAlive = $options['keep-alive'] ?? null;
+$workerKeepAlive = $workerKeepAlive === null ? null : (bool)(int)$workerKeepAlive;
+$workerWarmup = max(0, (int)($options['warmup'] ?? 0));
+
+$makeTransport = function () use ($registry, $transportFilter, $workerKeepAlive) {
+    if ($transportFilter === \BAGArt\ASKClient\Transport\Adapters\ASKSocketTransportAdapter::TYPE && $workerKeepAlive !== null) {
+        return \BAGArt\ASKClient\Transport\Adapters\ASKSocketTransportAdapter::withConfig(
+            new \BAGArt\ASKClient\SocketClient\HttpsSocketClientConfig(
+                keepAlive: $workerKeepAlive,
+            ),
+        );
+    }
+
+    return $registry->make($transportFilter);
+};
+$sources = require __DIR__.'/includes/currency-sources.php';
+$baselineMemory = memory_get_usage(true);
+
+// Worker XHProf: enable if --xhprof passed
+$xhprofTimestamp = $options['xhprof'] ?? '';
+$xhprofWorkerEnabled = $xhprofTimestamp !== '' && $xhprofTimestamp !== false;
+if ($xhprofWorkerEnabled) {
+    $xhprofWorkerDir = ((string)($options['xhprof_dir'] ?? dirname(
+            __DIR__,
+            4
+        ).'/storage/app/tmp/xhprof')).'/benchmark-transport';
+    if (extension_loaded('xhprof')) {
+        xhprof_enable(XHPROF_FLAGS_CPU | XHPROF_FLAGS_MEMORY);
+        fwrite(STDERR, "[benchmark_transport] XHProf enabled for {$transportFilter}\n");
+    } else {
+        fwrite(STDERR, "[benchmark_transport] WARNING: xhprof extension not loaded\n");
+    }
+}
+
+mt_srand(isset($options['seed']) ? (int)$options['seed'] : 0);
+shuffle($sources);
+mt_srand();
+
+fwrite(
+    STDERR,
+    sprintf(
+        "[benchmark_transport] transport=%s sources=%d runs=%d\n",
+        $transportFilter,
+        count($sources),
+        $runs,
+    )
+);
+
+$runConcurrent = static function (
+    string $transportName,
+    callable $makeTransport,
+    array $sources,
+    int $warmup = 0
+): array {
+    $sources = array_values($sources);
+    $total = count($sources);
+
+    $logger = new ASKLogWrapper(minLevel: 'error');
+    $kernel = new AsyncKernel($logger, shutdownTimeout: 30);
+
+    $transport = $makeTransport();
+    $resolver = new ASKPromiseResolver();
+    $kernel->addTickable($transport);
+    $kernel->addTickable($resolver);
+
+    $ok = 0;
+    $failed = 0;
+    $perUrl = [];
+    $reqTimes = [];
+
+    // ── Warmup phase (P3.1): fire N requests, drain, then reset metrics so the timed run
+    //    reflects steady-state. Connections stay warm in the pool; counters start at zero.
+    if ($warmup > 0) {
+        $warmupSources = array_slice($sources, 0, min($warmup, $total));
+        fwrite(STDERR, sprintf("  [%s] warmup: firing %d requests...\n", $transportName, count($warmupSources)));
+
+        $warmupCtx = new ASKFnDaemonContext(daemonName: 'warmup', logger: $logger);
+        $warmupDaemon = new ASKFnDaemon(
+            daemonContext: $warmupCtx,
+            fnProduce: function (ASKFnDaemonContext $context) use (
+                $transport,
+                $resolver,
+                $kernel,
+                $warmupSources
+            ): void {
+                $promises = [];
+                try {
+                    foreach ($warmupSources as $source) {
+                        $promises[] = $transport->requestAsync(
+                            new ASKHttpRequest(url: $source['url'], method: 'GET'),
+                        );
+                    }
+                    foreach ($promises as $promise) {
+                        try {
+                            $resolver->await($promise);
+                        } catch (\Throwable) {
+                            // Warmup failures are non-fatal — they prime the pool, not the metrics.
+                        }
+                    }
+                } finally {
+                    $kernel->stop('warmup complete');
+                }
+            },
+            fnCanProduce: fn (ASKFnDaemonContext $context): bool => !($context->payload['done'] ?? false),
+            fnShutdown: function (ASKFnDaemonContext $context, mixed $shutdownContext = null): bool {
+                $context->payload['done'] = true;
+
+                return true;
+            },
+        );
+        $kernel->addDaemon($warmupDaemon, 0);
+        $kernel->run();
+
+        // Reset counters so the timed run is measured clean. The connection pool is preserved.
+        // method_exists is appropriate here: the benchmark runs multiple transport types, only
+        // ask-socket exposes a MetricsCollector. The library boundary stays contract-only.
+        if (method_exists($transport, 'metrics')) {
+            $transport->metrics()->reset();
+        }
+    }
+
+    $context = new ASKFnDaemonContext(daemonName: 'bench', logger: $logger);
+    $daemon = new ASKFnDaemon(
+        daemonContext: $context,
+        fnProduce: function (ASKFnDaemonContext $context) use (
+            $transportName,
+            $transport,
+            $resolver,
+            $kernel,
+            $sources,
+            $total,
+            &$ok,
+            &$failed,
+            &$perUrl,
+            &$reqTimes
+        ): void {
+            $promises = $fireTimes = [];
+            $done = 0;
+
+            try {
+                foreach ($sources as $source) {
+                    $fireTimes[] = microtime(true);
+                    $promises[] = $transport->requestAsync(
+                        new ASKHttpRequest(url: $source['url'], method: 'GET'),
+                    );
+                }
+
+                foreach ($promises as $idx => $promise) {
+                    try {
+                        $resolver->await($promise);
+                        $elapsed = microtime(true) - $fireTimes[$idx];
+                        $ok++;
+                        $source = $sources[$idx];
+                        $key = $source['url'];
+                        if (!isset($perUrl[$key])) {
+                            $perUrl[$key] = [
+                                'name' => trim($source['name']),
+                                'url' => $source['url'],
+                                'times' => [],
+                            ];
+                        }
+                        $perUrl[$key]['times'][] = $elapsed;
+                        $reqTimes[] = $elapsed;
+                    } catch (\Throwable) {
+                        $failed++;
+                    }
+                    $done++;
+                    fwrite(
+                        STDERR,
+                        sprintf(
+                            "\r  [%s] %d/%d complete (%d fails)     ",
+                            $transportName,
+                            $done,
+                            $total,
+                            $failed,
+                        )
+                    );
+                }
+                fwrite(STDERR, "\n");
+            } finally {
+                $kernel->stop('concurrent complete');
+            }
+        },
+        fnCanProduce: fn (ASKFnDaemonContext $context): bool => !($context->payload['done'] ?? false),
+        fnShutdown: function (ASKFnDaemonContext $context, mixed $shutdownContext = null): bool {
+            $context->payload['done'] = true;
+
+            return true;
+        },
+    );
+
+    $kernel->addDaemon($daemon, 0);
+    $netStart = microtime(true);
+    $kernel->run();
+    $netTime = microtime(true) - $netStart;
+
+    // P3.2: read the client metrics snapshot (pool reuse, TLS, connection lifecycle).
+    // Empty for transports without a MetricsCollector (curl-multi, guzzle, amphp).
+    $metrics = method_exists($transport, 'metrics')
+        ? $transport->metrics()->snapshot()
+        : [];
+
+    // Per-request phase durations (DNS/TCP/TLS/write/TTFB/read), keyed by URL.
+    // Empty for transports without a MetricsCollector.
+    $phaseByUrl = [];
+    if (method_exists($transport, 'metrics')) {
+        foreach ($transport->metrics()->requestTimings() as $timing) {
+            if ($timing->url === null) {
+                continue;
+            }
+            $phaseByUrl[$timing->url][] = $timing->durations();
+        }
+    }
+
+    return [$netTime, $ok, $failed, $perUrl, $reqTimes, $metrics, $phaseByUrl];
+};
+
+$median = static function (array $values): float {
+    sort($values);
+    $n = count($values);
+    if ($n === 0) {
+        return 0.0;
+    }
+    if ($n % 2 === 1) {
+        return (float)$values[(int)($n / 2)];
+    }
+
+    return ((float)$values[$n / 2 - 1] + (float)$values[$n / 2]) / 2;
+};
+
+$stddev = static function (array $values): float {
+    $n = count($values);
+    if ($n < 2) {
+        return 0.0;
+    }
+    $mean = array_sum($values) / $n;
+    $variance = 0.0;
+    foreach ($values as $v) {
+        $variance += ($v - $mean) ** 2;
+    }
+
+    return sqrt($variance / ($n - 1));
+};
+
+$fairnessScore = static function (float $cv, float $successRate): int {
+    $consistencyPts = max(0, 50 * (1 - $cv / 1.0));
+    $reliabilityPts = $successRate * 50;
+
+    return (int)round($consistencyPts + $reliabilityPts);
+};
+
+$concurrentTimes = [];
+$allChunkTimes = [];
+$oks = 0;
+$faileds = 0;
+$allPerUrl = [];
+$retried = false;
+
+$lastMetrics = [];
+$lastPhaseByUrl = [];
+
+for ($attempt = 0; $attempt < 2; $attempt++) {
+    $concurrentTimes = [];
+    $allReqTimes = [];
+    $oks = 0;
+    $faileds = 0;
+    $allPerUrl = [];
+    $workerError = null;
+
+    try {
+        for ($r = 0; $r < $runs; $r++) {
+            if ($runs > 1) {
+                sleep(5);
+                fwrite(
+                    STDERR,
+                    sprintf(
+                        "  [%s] run %d/%d starting%s\n",
+                        $transportFilter,
+                        $r + 1,
+                        $runs,
+                        $attempt > 0 ? ' (retry)' : '',
+                    )
+                );
+            }
+            [$t, $ok, $failed, $perUrl, $reqTimes, $metrics, $phaseByUrl] = $runConcurrent(
+                $transportFilter,
+                $makeTransport,
+                $sources,
+                $workerWarmup,
+            );
+            $concurrentTimes[] = $t;
+            $allReqTimes[] = $reqTimes;
+            $oks += $ok;
+            $faileds += $failed;
+            // Keep the metrics from the most recent run (matches the median-time run for --runs=1).
+            $lastMetrics = $metrics;
+            $lastPhaseByUrl = $phaseByUrl;
+
+            foreach ($perUrl as $key => $data) {
+                if (!isset($allPerUrl[$key])) {
+                    $allPerUrl[$key] = ['name' => $data['name'], 'url' => $data['url'], 'times' => []];
+                }
+                $allPerUrl[$key]['times'] = array_merge($allPerUrl[$key]['times'], $data['times']);
+            }
+        }
+    } catch (\Throwable $e) {
+        $workerError = $e->getMessage();
+        if ($attempt === 0) {
+            $retried = true;
+            continue;
+        }
+        fwrite(STDERR, "Worker failed after retry: {$workerError}\n");
+        exit(3);
+    }
+
+    break;
+}
+
+$concurrentTime = $median($concurrentTimes);
+$total = $oks + $faileds;
+$successRate = $total > 0 ? $oks / $total : 0.0;
+
+// CV across all request times
+$flatReqTimes = array_merge(...$allReqTimes);
+$cv = $stddev($flatReqTimes) / max($flatReqTimes ?: [0.001]);
+$fairness = $fairnessScore($cv, $successRate);
+$peakMem = memory_get_peak_usage(true);
+$peakMemDelta = max(0, $peakMem - $baselineMemory);
+
+$rps = $concurrentTime > 0 ? $total / $concurrentTime : 0.0;
+
+$perUrlOut = [];
+foreach ($allPerUrl as $key => $data) {
+    $avgTime = count($data['times']) > 0 ? array_sum($data['times']) / count($data['times']) : 0;
+    $perUrlOut[] = [
+        'name' => $data['name'],
+        'url' => $data['url'],
+        'avg_time' => round($avgTime, 6),
+        'samples' => count($data['times']),
+    ];
+}
+
+// Save XHProf profile before output
+if ($xhprofWorkerEnabled && extension_loaded('xhprof')) {
+    $xhprofData = xhprof_disable();
+    $xhprofWorkerPath = $xhprofWorkerDir.'/'.$xhprofTimestamp.'_'.$transportFilter.'.xhprof.tmp';
+    if (!is_dir(dirname($xhprofWorkerPath))) {
+        mkdir(dirname($xhprofWorkerPath), 0700, true);
+    }
+    file_put_contents($xhprofWorkerPath, serialize($xhprofData));
+}
+
+echo json_encode([
+        'concurrent_time' => $concurrentTime,
+        'ok' => $oks,
+        'fail' => $faileds,
+        'total' => $total,
+        'rps' => round($rps, 2),
+        'fairness' => $fairness,
+        'cv' => round($cv, 4),
+        'peak_memory' => $peakMem,
+        'peak_memory_delta' => $peakMemDelta,
+        'baseline_memory' => $baselineMemory,
+        'per_url' => $perUrlOut,
+        'retried' => $retried,
+        // P3.2: client-side metrics snapshot (pool reuse, TLS, connection lifecycle).
+        // Empty for transports without a MetricsCollector (curl-multi, guzzle, amphp).
+        'metrics' => $lastMetrics,
+        // Per-request phase breakdown keyed by URL (ask-socket only).
+        'phase_by_url' => $lastPhaseByUrl,
+    ], JSON_THROW_ON_ERROR)."\n";
