@@ -28,6 +28,8 @@ use BAGArt\TelegramModuleEngine\Registry\ProviderSequence;
 use BAGArt\TelegramModuleEngine\Routing\CommandRouteLookup;
 use BAGArt\TelegramModuleEngine\Routing\PgRouteResolver;
 use BAGArt\TelegramModuleEngine\Routing\RouteResolver;
+use BAGArt\TelegramModuleEngine\Settings\DatabaseSettingsStorage;
+use BAGArt\TelegramModuleEngine\Settings\SettingsStorageContract;
 use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Database\ConnectionResolverInterface;
 use Illuminate\Support\ServiceProvider;
@@ -68,6 +70,13 @@ final class TelegramModuleEngineServiceProvider extends ServiceProvider
         );
 
         $this->app->singleton(EngineMetrics::class);
+
+        $this->app->singleton(
+            SettingsStorageContract::class,
+            static fn (Application $app): DatabaseSettingsStorage => new DatabaseSettingsStorage(
+                $app->make(ConnectionResolverInterface::class)->connection(),
+            ),
+        );
 
         $this->app->singleton(
             ModuleActivationService::class,
@@ -249,13 +258,8 @@ final class TelegramModuleEngineServiceProvider extends ServiceProvider
             $handler->renderable(is_string($renderable) ? $this->app->make($renderable) : $renderable);
         }
 
-        // Interchange keys consumed by engine-agnostic host tooling:
-        // `modules:pages` (page generators) and the menu module's
-        // `menu:pages` (frontend page source dirs). The engine is the SOLE
-        // producer — module providers never Config::set these keys again.
-        $config = $this->app->make('config');
-        $config->set('telegram.modules_frontend_pages', $registry->frontendPages());
-        $config->set('telegram.modules_page_generators', $registry->pageGenerators());
+        // Interchange keys are now consumed directly from the EngineModuleRegistry
+        // by `modules:pages` and `menu:pages` — no Config::set side-channels needed.
 
         $this->app->booted(function () use ($registry): void {
             $this->registerSchedule($registry);
