@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace BAGArt\TelegramModuleEngine\Config;
 
 use BAGArt\TelegramBot\Modules\TgModuleContract;
+use BAGArt\TelegramModuleEngine\Settings\SettingsScreenContribution;
 
 /**
  * Platform-level policy entry for one module in config/tg_modules.php.
@@ -16,10 +17,10 @@ use BAGArt\TelegramBot\Modules\TgModuleContract;
  *
  * The declarative component fields (schedule, HTTP routes, middleware
  * aliases, exception renderables, frontend page sources, page generator
- * commands) replace the legacy Config::set side-channels module providers
- * used to push at boot (telegram.modules_schedule, modules_frontend_pages,
- * modules_page_generators) plus the providers' own loadRoutesFrom() /
- * aliasMiddleware() / renderable() registrations.
+ * commands, settings screens) replace the legacy Config::set side-channels
+ * module providers used to push at boot (telegram.modules_schedule,
+ * modules_frontend_pages, modules_page_generators) plus the providers'
+ * own loadRoutesFrom() / aliasMiddleware() / renderable() registrations.
  */
 final readonly class TgModuleConfig
 {
@@ -48,6 +49,9 @@ final readonly class TgModuleConfig
      *                             host page generator globs (legacy modules_frontend_pages)
      * @param  list<string>  $pageGenerators  Artisan command names invoked by the host
      *                             `modules:pages` shim (legacy modules_page_generators)
+     * @param  list<SettingsScreenContribution>  $settingsScreens  settings screen descriptors
+     *                             contributed by this module; rendered by Management (web)
+     *                             and Menu (Telegram); config-file-based storage
      */
     public function __construct(
         public bool $enabled,
@@ -62,5 +66,6 @@ final readonly class TgModuleConfig
         public array $exceptionRenderables = [],
         public array $frontendPages = [],
         public array $pageGenerators = [],
+        public array $settingsScreens = [],
     ) {}
 }

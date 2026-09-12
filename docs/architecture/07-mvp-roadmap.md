@@ -22,7 +22,7 @@
 >   management + proxy-operations; architectural test guards it.
 > - Phase 4: `src/Capabilities` (exclusive-capability conflicts,
 >   static/effective graphs, structured BlockReason, reduced mode).
-> - Phase 5: separate packages `telegram-bot-lib-access`
+> - Phase 5: separate packages `telegram-platform-access`
 >   (BAGArt\TelegramBotAccess) and `telegram-platform-audit`
 >   (BAGArt\TelegramBotAudit) — pure-domain scaffolds, wired dev-mode.
 > - Phase 6: `tg:modules:diagnose [--bot=] [--format=json]` +
@@ -131,7 +131,7 @@
 ## 1. Package skeleton
 
 ```
-misc/BAGArt/telegram-module-engine/
+misc/BAGArt/telegram-platform-module/
 ├── composer.json / composer.prod.json     # dual manifests (platform rule)
 ├── phpunit.xml.dist + composer test       # own Pest suite
 ├── src/
@@ -207,14 +207,14 @@ misc/BAGArt/telegram-module-engine/
 
 ### Phase 5 — Ecosystem contracts (separate modules, own repos)
 - Per recorded decisions — each is an independent module, NOT engine code:
-  - `telegram-bot-lib-access` (task 02): AccessControlContract, ChatRole,
+  - `telegram-platform-access` (task 02): AccessControlContract, ChatRole,
     Grant, AccessDecision; menu task 08-roles-grants resolves overlap here.
   - `telegram-platform-audit` (task 04): AuditSink append-only.
   - Settings screens (task 03): engine-side descriptor contract + storage;
     generic renderers in Management (web) and Menu (telegram, task 25 stub —
     requires menu RFC extension first).
 - **Tests**: per module, negative tenant scoping included.
-- Docs: 02 (definitions), 33 (contributions), docs/tasks/module-engine/*.
+- Docs: 02 (definitions), 33 (contributions), platform repo docs/.
 
 ### Phase 6 — Diagnostics & hardening
 - `tg:modules:validate|list|diagnose|bot <id>` full surface, JSON output,

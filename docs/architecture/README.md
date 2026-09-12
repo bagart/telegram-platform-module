@@ -2,7 +2,7 @@
 
 Result of the 2026-08-27/28 review: the original 101-file ChatGPT plan was
 deduplicated (6 rewrite passes over ~7 topics), off-topic material removed,
-and every recorded decision lives in `docs/tasks/module-engine/` (platform repo).
+and every recorded decision lives in the platform repo's `docs/` directory.
 
 ## Document map (10 canonical docs, optimized 2026-08-28)
 
@@ -22,11 +22,11 @@ and every recorded decision lives in `docs/tasks/module-engine/` (platform repo)
 | `07-mvp-roadmap.md` | Package skeleton, phased implementation plan with test budgets | — |
 | `EXTRACTED-IDEAS.md` | One-line ideas salvaged from deleted off-topic files | — |
 
-## Binding decisions (see `docs/tasks/module-engine/` in the platform repo)
+## Binding decisions (see platform repo `docs/`)
 
 1. **01 — no reconciliation engine**: apply-on-activation + idempotency +
    computed effective state; drift is diagnostics' job.
-2. **02 — access control is a separate module** (`telegram-bot-lib-access`):
+2. **02 — access control is a separate module** (`telegram-platform-access`):
    engine only contributes permission definitions.
 3. **03 — settings screens as contributions**: PHP-DTO descriptor default +
    custom screen escape hatch; web rendering in Management, Telegram rendering

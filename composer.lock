@@ -136,7 +136,7 @@
                 "psr/container": "^2.0"
             },
             "require-dev": {
-                "bagart/telegram-devops-baseline": "@dev",
+                "bagart/telegram-platform-devops-baseline": "@dev",
                 "pestphp/pest": "^4.0"
             },
             "type": "library",

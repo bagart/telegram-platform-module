@@ -118,6 +118,7 @@ final readonly class ModuleRegistryBuilder
                 exceptionRenderables: $entry->exceptionRenderables,
                 frontendPages: $entry->frontendPages,
                 pageGenerators: $entry->pageGenerators,
+                settingsScreens: $entry->settingsScreens,
             );
         }
 

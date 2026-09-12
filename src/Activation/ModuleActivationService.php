@@ -6,6 +6,8 @@ namespace BAGArt\TelegramModuleEngine\Activation;
 
 use BAGArt\TelegramModuleEngine\Definition\TgModuleDefinition;
 use BAGArt\TelegramModuleEngine\Diagnostics\EngineMetrics;
+use BAGArt\TelegramModuleEngine\Events\BotModuleDisabled;
+use BAGArt\TelegramModuleEngine\Events\BotModuleEnabled;
 use BAGArt\TelegramModuleEngine\Registry\EngineModuleRegistry;
 use Illuminate\Database\ConnectionInterface;
 
@@ -124,6 +126,8 @@ final class ModuleActivationService
                 'updated_at' => now(),
             ]);
 
+            $this->dispatchEvent($status, $botId, $moduleId, 1);
+
             return new ActivationResult($target, 1);
         }
 
@@ -142,7 +146,10 @@ final class ModuleActivationService
             return $this->conflict($botId, $moduleId, $expectedRevision ?? $currentRevision);
         }
 
-        return new ActivationResult($target, $currentRevision + 1);
+        $newRevision = $currentRevision + 1;
+        $this->dispatchEvent($status, $botId, $moduleId, $newRevision);
+
+        return new ActivationResult($target, $newRevision);
     }
 
     /**
@@ -218,5 +225,14 @@ final class ModuleActivationService
         $row = $this->activations->rowFor($botId, $moduleId);
 
         return $row === null ? 0 : (int) $row->revision;
+    }
+
+    private function dispatchEvent(string $status, string $botId, string $moduleId, int $revision): void
+    {
+        $event = $status === ModuleActivationReader::STATUS_ENABLED
+            ? new BotModuleEnabled($botId, $moduleId, $revision)
+            : new BotModuleDisabled($botId, $moduleId, $revision);
+
+        event($event);
     }
 }

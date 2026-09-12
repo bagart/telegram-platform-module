@@ -73,7 +73,7 @@ bootstrap/providers.php
 ## 3. Cutover phases (each phase ships independently, platform stays green)
 
 ### Phase 0 — Engine skeleton (no behavior change)
-- Package layout per platform module rules (`misc/BAGArt/telegram-module-engine/`,
+- Package layout per platform module rules (`misc/BAGArt/telegram-platform-module/`,
   dev-mode PSR-4 mapping, dual manifests, own Pest suite + host testsuite entry).
 - Engine provider registered but boots as a no-op observer: it logs what it
   *would* take over. `cmd/deps/check` parity.

@@ -5,11 +5,14 @@ declare(strict_types=1);
 namespace BAGArt\TelegramModuleEngine\Settings;
 
 /**
- * Contract for storing and retrieving resolved settings values.
+ * Contract for storing and retrieving bot-specific setting overrides.
  *
- * Implementations are engine-owned state (like activations). The storage
- * is tenant-scoped (bot as tenant per platform rule) with optional chat
- * scope for per-chat overrides.
+ * This contract is for runtime overrides only (per-bot settings that override
+ * platform defaults from config files). Canonical platform and module settings
+ * live in config files (*.php, JSON, YML), NOT in DB.
+ *
+ * Storage is tenant-scoped (bot as tenant per platform rule) with optional
+ * chat scope for per-chat overrides.
  */
 interface SettingsStorageContract
 {

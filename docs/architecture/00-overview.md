@@ -1,5 +1,5 @@
 # Telegram Module Engine — Architecture Overview
-> Модуль: `bagart/telegram-module-engine`
+> Модуль: `bagart/telegram-platform-module`
 >
 > PHP namespace: `BAGArt\TelegramModuleEngine`
 >
@@ -29,7 +29,7 @@ Engine не реализует бизнес-логику конкретных м
 
 На Engine могут опираться:
 
-- Telegram Bot Platform; Telegram Bot Management; Telegram Bot Menu Module; permission system (отдельный модуль `telegram-bot-lib-access`); runtime Telegram handlers; jobs/events; frontend; другие module packages.
+- Telegram Bot Platform; Telegram Bot Management; Telegram Bot Menu Module; permission system (отдельный модуль `telegram-platform-access`); runtime Telegram handlers; jobs/events; frontend; другие module packages.
 
 ---
 # 2. Context
@@ -114,7 +114,7 @@ Platform code должен взаимодействовать с Engine чере
 # 5. Non-Goals
 `TelegramModuleEngine` НЕ должен:
 
-- реализовывать бизнес-логику modules; знать детали Cinema Radar, Mafia, Proxy Operations, любых конкретных modules; знать конкретные module settings; содержать module-specific conditions; быть админкой; быть menu system; быть permission system (permission system — отдельный модуль `telegram-bot-lib-access`); быть audit system (audit — отдельный модуль); быть Telegram Bot API client; выполнять любые Telegram transport-вызовы (HTTP/API) — Engine не знает Telegram transport; быть очередью; быть scheduler; быть Composer package manager; самостоятельно устанавливать Composer packages; заменять Laravel Service Container; превращаться в универсальный framework plugin system; содержать reconciliation-механику (K8s-style reconcile loops, fencing tokens, desired/observed registries) — применяется apply-on-activation + идемпотентность + вычисляемое effective state.
+- реализовывать бизнес-логику modules; знать детали Cinema Radar, Mafia, Proxy Operations, любых конкретных modules; знать конкретные module settings; содержать module-specific conditions; быть админкой; быть menu system; быть permission system (permission system — отдельный модуль `telegram-platform-access`); быть audit system (audit — отдельный модуль); быть Telegram Bot API client; выполнять любые Telegram transport-вызовы (HTTP/API) — Engine не знает Telegram transport; быть очередью; быть scheduler; быть Composer package manager; самостоятельно устанавливать Composer packages; заменять Laravel Service Container; превращаться в универсальный framework plugin system; содержать reconciliation-механику (K8s-style reconcile loops, fencing tokens, desired/observed registries) — применяется apply-on-activation + идемпотентность + вычисляемое effective state.
 
 Engine предоставляет инфраструктурные contracts, а конкретные modules используют их.
 
@@ -651,7 +651,7 @@ Contributions должны быть идемпотентными.
 
 ---
 # 28. Permissions
-Permission SYSTEM является отдельным модулем (`telegram-bot-lib-access`). Engine только хостит permission DEFINITIONS, декларативно объявляемые модулями.
+Permission SYSTEM является отдельным модулем (`telegram-platform-access`). Engine только хостит permission DEFINITIONS, декларативно объявляемые модулями.
 
 Разделение ответственности:
 
@@ -1649,7 +1649,7 @@ Engine не содержит business logic конкретных modules.
 Module-specific settings принадлежат module.
 
 ### I-09
-Permission definitions хостятся Engine (объявлены модулями); permission system (grants, evaluation) является отдельным модулем `telegram-bot-lib-access`.
+Permission definitions хостятся Engine (объявлены модулями); permission system (grants, evaluation) является отдельным модулем `telegram-platform-access`.
 
 ### I-10
 Все contributions имеют module ownership.

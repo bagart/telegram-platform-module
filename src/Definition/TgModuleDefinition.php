@@ -6,6 +6,7 @@ namespace BAGArt\TelegramModuleEngine\Definition;
 
 use BAGArt\TelegramBot\Modules\TgModuleContract;
 use BAGArt\TelegramBot\Modules\TgModuleDescriptor;
+use BAGArt\TelegramModuleEngine\Settings\SettingsScreenContribution;
 
 /**
  * Resolved, immutable view of one module: its descriptor (module-owned
@@ -27,6 +28,7 @@ final readonly class TgModuleDefinition
      * @param  list<class-string|callable>  $exceptionRenderables  exception handler renderables
      * @param  list<string>  $frontendPages  absolute Inertia page source dirs
      * @param  list<string>  $pageGenerators  Artisan command names for the host modules:pages shim
+     * @param  list<SettingsScreenContribution>  $settingsScreens  settings screen descriptors
      */
     public function __construct(
         public string $configKey,
@@ -43,6 +45,7 @@ final readonly class TgModuleDefinition
         public array $exceptionRenderables = [],
         public array $frontendPages = [],
         public array $pageGenerators = [],
+        public array $settingsScreens = [],
     ) {}
 
     public function id(): string

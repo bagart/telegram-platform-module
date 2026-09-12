@@ -1,6 +1,6 @@
 {
     "$schema": "https://getcomposer.org/schema.json",
-    "name": "bagart/telegram-module-engine",
+    "name": "bagart/telegram-platform-module",
     "description": "Module engine for the Telegram bot platform: declarative module registry, config policy, lifecycle and per-bot activation contracts",
     "type": "library",
     "license": "MIT",
