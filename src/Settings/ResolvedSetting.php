@@ -20,18 +20,18 @@ final readonly class ResolvedSetting
      * @param  string  $fieldId  Field identifier within the screen.
      * @param  mixed  $value  The resolved value (scalar, bool, or string).
      * @param  int|null  $chatId  Chat scope (null = bot-wide).
-     * @param  string  $resolvedAt  ISO 8601 timestamp of last resolution.
+     * @param  string|null  $resolvedAt  ISO 8601 timestamp of last resolution (defaults to now).
      */
+    public string $resolvedAt;
+
     public function __construct(
         public string $botId,
         public string $screenId,
         public string $fieldId,
         public mixed $value,
         public ?int $chatId = null,
-        public string $resolvedAt = '',
+        ?string $resolvedAt = null,
     ) {
-        if ($this->resolvedAt === '') {
-            $this->resolvedAt = (new DateTimeImmutable())->format(DateTimeImmutable::ATOM);
-        }
+        $this->resolvedAt = $resolvedAt ?? (new DateTimeImmutable())->format(DateTimeImmutable::ATOM);
     }
 }
