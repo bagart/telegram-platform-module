@@ -17,7 +17,8 @@ final readonly class JsonConfigFileAccess implements ConfigFileAccessContract
     public function __construct(
         private Filesystem $filesystem,
         private string $storagePath,
-    ) {}
+    ) {
+    }
 
     public function read(string $moduleId): array
     {

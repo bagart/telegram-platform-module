@@ -21,7 +21,8 @@ final readonly class EffectiveDependencyGraph
         public array $activeModuleIds,
         public array $reducedMode,
         public array $blocked,
-    ) {}
+    ) {
+    }
 
     public function isActive(string $moduleId): bool
     {

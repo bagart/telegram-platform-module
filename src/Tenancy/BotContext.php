@@ -23,7 +23,8 @@ final readonly class BotContext
         public string $botId,
         public ?int $chatId,
         public ScopeLevel $scope,
-    ) {}
+    ) {
+    }
 
     /** Bot-scoped context: an operation against the bot itself (no chat). */
     public static function forBot(string $botId): self

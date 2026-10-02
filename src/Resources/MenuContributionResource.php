@@ -38,7 +38,8 @@ final readonly class MenuContributionResource
         public string $registrationScope = 'PLATFORM',
         /** Activation scope: BOT | CHAT. */
         public string $activationScope = 'BOT',
-    ) {}
+    ) {
+    }
 
     /**
      * Resolve the effective label from the i18n map.

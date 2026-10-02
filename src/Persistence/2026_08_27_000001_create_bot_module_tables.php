@@ -14,8 +14,7 @@ use Illuminate\Support\Facades\Schema;
  * module_id is a stable logical string — no FK on any installed-modules
  * table (Composer state, not DB state).
  */
-return new class extends Migration
-{
+return new class () extends Migration {
     public function up(): void
     {
         Schema::create('bot_module_activations', function (Blueprint $table): void {
@@ -33,7 +32,7 @@ return new class extends Migration
             $table->id();
             $table->string('bot_id');
             $table->string('module_id');
-            $table->string('entry_type'); // typed entry kind, e.g. "telegram.command"
+            $table->string('entry_type'); // typed entry kind, e.g. "command", "callback"
             $table->string('entry_key'); // dispatch key within the type
             $table->unsignedInteger('priority')->default(0);
             $table->json('payload')->nullable();

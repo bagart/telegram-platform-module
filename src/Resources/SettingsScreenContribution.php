@@ -34,5 +34,6 @@ final readonly class SettingsScreenContribution
         public string $registrationScope = 'PLATFORM',
         /** Activation scope: BOT | CHAT. */
         public string $activationScope = 'BOT',
-    ) {}
+    ) {
+    }
 }

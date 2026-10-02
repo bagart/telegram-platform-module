@@ -7,8 +7,8 @@ namespace BAGArt\TelegramModuleEngine\Settings;
 /**
  * A typed setting field contribution from a module.
  *
- * Pure DTO — describes one configurable field with its type, default, range,
- * and i18n keys. No I/O, no behavior, same style as TelegramModuleConfig.
+ * Describes one configurable field with its type, default, range, and i18n
+ * keys, and validates candidate values against those constraints. No I/O.
  */
 final readonly class SettingsField
 {
@@ -34,5 +34,47 @@ final readonly class SettingsField
         public ?array $options = null,
         public bool $required = true,
     ) {
+    }
+
+    /**
+     * Validate a candidate value against this field's constraints.
+     *
+     * @return list<string> Error messages, empty when the value is valid.
+     */
+    public function validate(mixed $value): array
+    {
+        if ($value === null) {
+            return $this->required
+                ? [sprintf('%s is required', $this->fieldId)]
+                : [];
+        }
+
+        if ($this->type === SettingsFieldType::Int || $this->type === SettingsFieldType::Float) {
+            if (! is_numeric($value)) {
+                return [sprintf('%s must be numeric', $this->fieldId)];
+            }
+
+            $errors = [];
+
+            if ($this->min !== null && $value < $this->min) {
+                $errors[] = sprintf('%s must be at least %s', $this->fieldId, $this->min);
+            }
+
+            if ($this->max !== null && $value > $this->max) {
+                $errors[] = sprintf('%s must be at most %s', $this->fieldId, $this->max);
+            }
+
+            return $errors;
+        }
+
+        if ($this->type === SettingsFieldType::Enum && $this->options !== null) {
+            $allowed = array_column($this->options, 'value');
+
+            if (! in_array($value, $allowed, true)) {
+                return [sprintf('%s must be one of: %s', $this->fieldId, implode(', ', $allowed))];
+            }
+        }
+
+        return [];
     }
 }

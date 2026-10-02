@@ -15,5 +15,6 @@ final readonly class CapabilityRequirement
         public string $capabilityId,
         /** Missing optional capability degrades the module to reduced mode instead of blocking it (16 §76). */
         public bool $optional = false,
-    ) {}
+    ) {
+    }
 }

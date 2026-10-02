@@ -18,7 +18,8 @@ final readonly class BlockReason
         public string $blockingModuleId = '',
         /** Short human-readable explanation. */
         public string $detail = '',
-    ) {}
+    ) {
+    }
 
     public function message(): string
     {

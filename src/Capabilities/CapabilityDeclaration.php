@@ -19,5 +19,6 @@ final readonly class CapabilityDeclaration
         public TgModuleCapability $kind,
         /** Exclusive capabilities may be claimed by at most one active module (16 §61). */
         public bool $exclusive = false,
-    ) {}
+    ) {
+    }
 }
