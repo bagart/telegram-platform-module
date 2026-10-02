@@ -23,7 +23,8 @@ final readonly class RouteTableSync
         private ModuleActivationReader $activations,
         private EngineModuleRegistry $registry,
         private string $table = 'bot_module_routes',
-    ) {}
+    ) {
+    }
 
     /**
      * Dry-run counterpart of syncForBot: what the next sync would change.
@@ -85,38 +86,40 @@ final readonly class RouteTableSync
      */
     public function syncForBot(string $botId): array
     {
-        $active = $this->activations->activeModuleIds($botId);
+        return $this->connection->transaction(function () use ($botId): array {
+            $active = $this->activations->activeModuleIds($botId);
 
-        $written = 0;
-        foreach ($active as $moduleId) {
-            $definition = $this->registry->get($moduleId);
-            if ($definition === null) {
-                continue;
+            $written = 0;
+            foreach ($active as $moduleId) {
+                $definition = $this->registry->get($moduleId);
+                if ($definition === null) {
+                    continue;
+                }
+
+                foreach ($definition->routes as $route) {
+                    $this->connection->table($this->table)->updateOrInsert(
+                        [
+                            'bot_id' => $botId,
+                            'module_id' => $moduleId,
+                            'entry_type' => $route->type,
+                            'entry_key' => $route->key,
+                        ],
+                        [
+                            'priority' => $route->priority,
+                            'payload' => $route->payload === null ? null : json_encode($route->payload),
+                            'updated_at' => Date::now(),
+                        ],
+                    );
+                    $written++;
+                }
             }
 
-            foreach ($definition->routes as $route) {
-                $this->connection->table($this->table)->updateOrInsert(
-                    [
-                        'bot_id' => $botId,
-                        'module_id' => $moduleId,
-                        'entry_type' => $route->type,
-                        'entry_key' => $route->key,
-                    ],
-                    [
-                        'priority' => $route->priority,
-                        'payload' => $route->payload === null ? null : json_encode($route->payload),
-                        'updated_at' => Date::now(),
-                    ],
-                );
-                $written++;
-            }
-        }
+            $removed = $this->connection->table($this->table)
+                ->where('bot_id', $botId)
+                ->whereNotIn('module_id', $active === [] ? [''] : $active)
+                ->delete();
 
-        $removed = $this->connection->table($this->table)
-            ->where('bot_id', $botId)
-            ->whereNotIn('module_id', $active === [] ? [''] : $active)
-            ->delete();
-
-        return ['written' => $written, 'removed' => $removed];
+            return ['written' => $written, 'removed' => $removed];
+        });
     }
 }

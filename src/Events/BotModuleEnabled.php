@@ -17,5 +17,8 @@ final class BotModuleEnabled
         public readonly string $botId,
         public readonly string $moduleId,
         public readonly int $revision,
-    ) {}
+        public readonly ?string $actorId = null,
+        public readonly ?string $actorType = null,
+    ) {
+    }
 }

@@ -15,21 +15,31 @@ use BAGArt\TelegramModuleEngine\Definition\TgModuleDefinition;
  */
 final readonly class ProviderSequence
 {
+    /** @var list<class-string> missing dependency ids that were warned about */
+    public array $missingDependencies;
+
+    private const WHITE = 0;
+    private const GRAY = 1;
+    private const BLACK = 2;
+
     public function __construct(
         private EngineModuleRegistry $registry,
-    ) {}
+    ) {
+        $this->missingDependencies = $this->detectMissingDependencies();
+    }
 
     /**
      * @return list<class-string> Laravel provider class-strings, dependencies first
+     * @throws CyclicDependencyException when a dependency cycle is detected
      */
     public function laravelProviders(): array
     {
         $ordered = [];
-        $visited = [];
+        $color = [];
 
         foreach ($this->registry->all() as $definition) {
             if ($definition->enabled) {
-                $this->visit($definition, $visited, $ordered);
+                $this->visit($definition, $color, $ordered);
             }
         }
 
@@ -37,25 +47,54 @@ final readonly class ProviderSequence
     }
 
     /**
-     * @param  array<string, bool>  $visited
+     * @param  array<string, int>  $color
      * @param  list<class-string>  $ordered
      */
-    private function visit(TgModuleDefinition $definition, array &$visited, array &$ordered): void
+    private function visit(TgModuleDefinition $definition, array &$color, array &$ordered): void
     {
-        if (isset($visited[$definition->id()])) {
+        $id = $definition->id();
+
+        $currentState = $color[$id] ?? self::WHITE;
+        if ($currentState === self::BLACK) {
             return;
         }
-        $visited[$definition->id()] = true;
+
+        if ($currentState === self::GRAY) {
+            throw CyclicDependencyException::detected($id);
+        }
+
+        $color[$id] = self::GRAY;
 
         foreach (array_keys($definition->descriptor->requiresModules) as $dependencyId) {
             $dependency = $this->registry->get((string) $dependencyId);
             if ($dependency !== null && $dependency->enabled) {
-                $this->visit($dependency, $visited, $ordered);
+                $this->visit($dependency, $color, $ordered);
             }
         }
+
+        $color[$id] = self::BLACK;
 
         if ($definition->laravelProvider !== null) {
             $ordered[] = $definition->laravelProvider;
         }
+    }
+
+    /**
+     * @return list<string> dependency ids that are required but not registered or enabled
+     */
+    private function detectMissingDependencies(): array
+    {
+        $missing = [];
+        foreach ($this->registry->enabled() as $definition) {
+            foreach (array_keys($definition->descriptor->requiresModules) as $dependencyId) {
+                $depId = (string) $dependencyId;
+                $dependency = $this->registry->get($depId);
+                if ($dependency === null || ! $dependency->enabled) {
+                    $missing[] = $depId;
+                }
+            }
+        }
+
+        return array_values(array_unique($missing));
     }
 }

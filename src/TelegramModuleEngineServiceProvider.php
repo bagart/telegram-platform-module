@@ -6,18 +6,26 @@ namespace BAGArt\TelegramModuleEngine;
 
 use BAGArt\TelegramBot\Contracts\Modules\CommandRouteContract;
 use BAGArt\TelegramBot\Contracts\Modules\ModuleEnablementContract;
+use BAGArt\TelegramBot\Contracts\Modules\ModuleSettingsContract;
 use BAGArt\TelegramBot\Modules\ModuleBootloader;
+use BAGArt\TelegramBot\Modules\TgModuleCapability;
+use BAGArt\TelegramModuleEngine\Events\BotModuleDisabled;
+use BAGArt\TelegramModuleEngine\Events\BotModuleEnabled;
 use BAGArt\TelegramModuleEngine\Activation\EngineModuleEnablement;
+use BAGArt\TelegramModuleEngine\Activation\EngineSettingsAdapter;
 use BAGArt\TelegramModuleEngine\Diagnostics\EngineMetrics;
 use BAGArt\TelegramModuleEngine\Activation\ModuleActivationReader;
 use BAGArt\TelegramModuleEngine\Activation\ModuleActivationService;
+use BAGArt\TelegramModuleEngine\Activation\ModuleActivationWriterContract;
 use BAGArt\TelegramModuleEngine\Console\TgModulesDiagnoseCommand;
 use BAGArt\TelegramModuleEngine\Console\TgModulesDisableCommand;
 use BAGArt\TelegramModuleEngine\Console\TgModulesEnableCommand;
 use BAGArt\TelegramModuleEngine\Console\TgModulesListCommand;
 use BAGArt\TelegramModuleEngine\Console\TgModulesRoutesCheckCommand;
 use BAGArt\TelegramModuleEngine\Console\TgModulesRoutesSyncCommand;
+use BAGArt\TelegramModuleEngine\Console\TgModulesStatusCommand;
 use BAGArt\TelegramModuleEngine\Console\TgModulesValidateCommand;
+use BAGArt\TelegramModuleEngine\Registry\CyclicDependencyException;
 use BAGArt\TelegramModuleEngine\Registry\EngineModuleRegistry;
 use BAGArt\TelegramModuleEngine\Registry\CommandSignatureInspector;
 use BAGArt\TelegramModuleEngine\Registry\ModuleRegistryBuilder;
@@ -89,10 +97,16 @@ final class TelegramModuleEngineServiceProvider extends ServiceProvider
         );
 
         $this->app->singleton(
+            ModuleActivationWriterContract::class,
+            static fn (Application $app): ModuleActivationService => $app->make(ModuleActivationService::class),
+        );
+
+        $this->app->singleton(
             RouteResolver::class,
             static fn (Application $app): PgRouteResolver => new PgRouteResolver(
                 $app->make(ConnectionResolverInterface::class)->connection(),
                 $app->make(ModuleActivationReader::class),
+                $app->make(\Illuminate\Contracts\Cache\Repository::class),
                 'bot_module_routes',
                 $app->make(EngineMetrics::class),
             ),
@@ -167,11 +181,34 @@ final class TelegramModuleEngineServiceProvider extends ServiceProvider
     private function registerModuleLaravelProviders(): void
     {
         $registry = $this->app->make(EngineModuleRegistry::class);
-        $providers = (new ProviderSequence($registry))->laravelProviders();
+        $sequence = new ProviderSequence($registry);
+
+        if ($sequence->missingDependencies !== []) {
+            $this->app->make('log')->warning('tg-modules: required module dependencies are not installed or enabled', [
+                'missing' => $sequence->missingDependencies,
+            ]);
+        }
+
+        try {
+            $providers = $sequence->laravelProviders();
+        } catch (CyclicDependencyException $e) {
+            if ($this->app->make('config')->get('tg_modules.strict', false)) {
+                throw $e;
+            }
+
+            $this->app->make('log')->error('tg-modules: cyclic module dependency detected, provider registration aborted', [
+                'message' => $e->getMessage(),
+            ]);
+
+            return;
+        }
+
+        $registered = [];
 
         foreach ($providers as $providerClass) {
             try {
                 $this->app->register($providerClass);
+                $registered[] = $providerClass;
             } catch (Throwable $e) {
                 if ($this->app->make('config')->get('tg_modules.strict', false)) {
                     throw $e;
@@ -182,6 +219,18 @@ final class TelegramModuleEngineServiceProvider extends ServiceProvider
                     'exception' => $e::class,
                     'message' => $e->getMessage(),
                 ]);
+
+                foreach (array_reverse($registered) as $rolledBack) {
+                    try {
+                        $this->app->forgetInstance($rolledBack);
+                    } catch (Throwable) {
+                        $this->app->make('log')->warning('tg-modules: failed to rollback provider during cleanup', [
+                            'provider' => $rolledBack,
+                        ]);
+                    }
+                }
+
+                break;
             }
         }
     }
@@ -204,9 +253,13 @@ final class TelegramModuleEngineServiceProvider extends ServiceProvider
             TgModulesDisableCommand::class,
             TgModulesRoutesSyncCommand::class,
             TgModulesRoutesCheckCommand::class,
+            TgModulesStatusCommand::class,
         ]);
 
         $this->bindDispatchEnablement();
+        $this->bindEngineSettings();
+
+        $this->listenForActivationEvents();
 
         $this->registerDeclarations();
 
@@ -235,12 +288,35 @@ final class TelegramModuleEngineServiceProvider extends ServiceProvider
             return;
         }
 
+        // Warn when a UI module does not declare 'menu' in requiresModules.
+        // Without this dependency, MenuCatalogRefiner silently drops its manifest.
+        foreach ($registry->all() as $definition) {
+            $hasUi = in_array(TgModuleCapability::Ui, $definition->descriptor->capabilities, true);
+            $needsMenu = array_key_exists('menu', $definition->descriptor->requiresModules);
+
+            if ($hasUi && ! $needsMenu) {
+                $this->app->make('log')->warning('tg-modules: module declares Ui capability without requiresModules menu — its UI manifest will be silently dropped by MenuCatalogRefiner', [
+                    'moduleId' => $definition->descriptor->id,
+                ]);
+            }
+        }
+
         foreach ($registry->httpRoutes() as $routeFile) {
-            if (is_file($routeFile)) {
-                $this->loadRoutesFrom($routeFile);
-            } else {
+            if (! is_file($routeFile)) {
                 $this->app->make('log')->warning('tg-modules: declared HTTP route file missing, skipped', [
                     'path' => $routeFile,
+                ]);
+
+                continue;
+            }
+
+            try {
+                $this->loadRoutesFrom($routeFile);
+            } catch (Throwable $e) {
+                $this->app->make('log')->warning('tg-modules: route file failed to load, skipped', [
+                    'path' => $routeFile,
+                    'exception' => $e::class,
+                    'message' => $e->getMessage(),
                 ]);
             }
         }
@@ -296,6 +372,53 @@ final class TelegramModuleEngineServiceProvider extends ServiceProvider
         $this->app->singleton(ModuleEnablementContract::class, static fn (Application $app): EngineModuleEnablement => new EngineModuleEnablement(
             $app->make(ModuleActivationReader::class),
         ));
+    }
+
+    /**
+     * Engine settings adapter (doc 05 / Phase 4.4): when enablement_driver
+     * is 'engine', bind ModuleSettingsContract to the engine adapter that
+     * reads and writes bot_module_activations (settings storage + activation
+     * writer) instead of the legacy tg_module_enablements table. The
+     * management-lib's bridge binding (TelegramBotManagementServiceProvider)
+     * is skipped for this contract when the engine driver is active.
+     */
+    private function bindEngineSettings(): void
+    {
+        if ($this->app->make('config')->get('tg_modules.enablement_driver', 'legacy') !== 'engine') {
+            return;
+        }
+
+        $this->app->singleton(ModuleSettingsContract::class, static fn (Application $app): EngineSettingsAdapter => new EngineSettingsAdapter(
+            $app->make(SettingsStorageContract::class),
+            $app->make(ModuleActivationWriterContract::class),
+        ));
+    }
+
+    private function listenForActivationEvents(): void
+    {
+        $this->app->make('events')->listen(BotModuleEnabled::class, function (BotModuleEnabled $event): void {
+            $this->refreshRouteCaches($event->botId);
+        });
+        $this->app->make('events')->listen(BotModuleDisabled::class, function (BotModuleDisabled $event): void {
+            $this->refreshRouteCaches($event->botId);
+        });
+    }
+
+    private function refreshRouteCaches(string $botId): void
+    {
+        if ($this->app->bound(CommandRouteContract::class)) {
+            $lookup = $this->app->make(CommandRouteContract::class);
+            if ($lookup instanceof CommandRouteLookup) {
+                $lookup->refresh($botId);
+            }
+        }
+
+        if ($this->app->bound(RouteResolver::class)) {
+            $resolver = $this->app->make(RouteResolver::class);
+            if ($resolver instanceof PgRouteResolver) {
+                $resolver->invalidateBot($botId);
+            }
+        }
     }
 
     /**

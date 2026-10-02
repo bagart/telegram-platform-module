@@ -18,7 +18,8 @@ final readonly class RoutingTable
     public function __construct(
         public string $botId,
         public array $entries,
-    ) {}
+    ) {
+    }
 
     /** @return list<string> unique sorted module ids present in the table */
     public function moduleIds(): array

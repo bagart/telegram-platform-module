@@ -33,4 +33,19 @@ enum RegistryErrorCode: string
 
     /** two enabled modules declare Artisan commands with the same signature */
     case CommandSignatureCollision = 'COMMAND_SIGNATURE_COLLISION';
+
+    /** dependency cycle detected in ProviderSequence */
+    case CyclicDependency = 'CYCLIC_DEPENDENCY';
+
+    /** required module dependency is not installed or enabled */
+    case MissingDependency = 'MISSING_DEPENDENCY';
+
+    /** laravelProvider class does not exist or is not a ServiceProvider */
+    case LaravelProviderInvalid = 'LARAVEL_PROVIDER_INVALID';
+
+    /** declared class-string (seeder, httpRoute, frontendPage) does not exist */
+    case ClassStringInvalid = 'CLASS_STRING_INVALID';
+
+    /** duplicate route entry (entry_type, entry_key) across modules */
+    case DuplicateRouteEntry = 'DUPLICATE_ROUTE_ENTRY';
 }

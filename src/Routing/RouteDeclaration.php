@@ -19,5 +19,6 @@ final readonly class RouteDeclaration
         public int $priority = 0,
         /** @var array<string, mixed>|null free-form payload persisted as JSON */
         public ?array $payload = null,
-    ) {}
+    ) {
+    }
 }

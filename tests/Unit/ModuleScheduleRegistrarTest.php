@@ -24,10 +24,11 @@ final class ModuleScheduleRegistrarTest extends TestCase
     {
         // Schedule mutexes need a cache factory; provide a minimal container
         // with an in-memory repository (no Laravel application is booted).
-        $container = new Container;
-        $container->singleton(CacheFactory::class, static fn (): CacheFactory => new class(new CacheRepository(new ArrayStore)) implements CacheFactory
-        {
-            public function __construct(private readonly CacheRepository $repository) {}
+        $container = new Container();
+        $container->singleton(CacheFactory::class, static fn (): CacheFactory => new class (new CacheRepository(new ArrayStore())) implements CacheFactory {
+            public function __construct(private readonly CacheRepository $repository)
+            {
+            }
 
             public function store($name = null)
             {

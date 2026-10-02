@@ -23,7 +23,8 @@ final readonly class ModuleScheduleRegistrar
         private Schedule $schedule,
         private EngineModuleRegistry $registry,
         private array $overrides,
-    ) {}
+    ) {
+    }
 
     public function register(): void
     {

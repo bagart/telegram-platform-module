@@ -56,6 +56,7 @@ final class CommandRouteLookup implements CommandRouteContract
 
         $map = [];
         foreach ($entries as $entry) {
+            // Route type convention: 'command' is canonical; 'telegram.command' accepted for backward compat.
             if ($entry->entryType !== 'command' && $entry->entryType !== 'telegram.command') {
                 continue;
             }

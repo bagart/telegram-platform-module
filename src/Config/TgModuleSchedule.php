@@ -19,5 +19,6 @@ final readonly class TgModuleSchedule
         public string $command,
         public string $expression,
         public bool $enabled = true,
-    ) {}
+    ) {
+    }
 }

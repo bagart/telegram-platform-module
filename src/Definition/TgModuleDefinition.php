@@ -29,6 +29,7 @@ final readonly class TgModuleDefinition
      * @param  list<string>  $frontendPages  absolute Inertia page source dirs
      * @param  list<string>  $pageGenerators  Artisan command names for the host modules:pages shim
      * @param  list<SettingsScreenContribution>  $settingsScreens  settings screen descriptors
+     * @param  string|null  $sourcePath  absolute module source root for path resolution
      */
     public function __construct(
         public string $configKey,
@@ -46,7 +47,9 @@ final readonly class TgModuleDefinition
         public array $frontendPages = [],
         public array $pageGenerators = [],
         public array $settingsScreens = [],
-    ) {}
+        public ?string $sourcePath = null,
+    ) {
+    }
 
     public function id(): string
     {

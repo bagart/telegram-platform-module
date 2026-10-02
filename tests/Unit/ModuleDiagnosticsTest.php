@@ -52,21 +52,19 @@ final class ModuleDiagnosticsTest extends TestCase
 
     public function test_resolves_activation_and_routing_per_module_for_bot(): void
     {
-        $probe = new class implements ActivationStateProbe
-        {
+        $probe = new class () implements ActivationStateProbe {
             public function isEffectivelyEnabled(string $botId, string $moduleId): bool
             {
                 return $moduleId === 'alpha';
             }
         };
 
-        $resolver = new class implements RouteResolver
-        {
+        $resolver = new class () implements RouteResolver {
             public function resolve(BotContext $context): RoutingTable
             {
                 return new RoutingTable($context->botId, [
-                    new RouteEntry('alpha', 'telegram.command', '/a1'),
-                    new RouteEntry('alpha', 'telegram.command', '/a2'),
+                    new RouteEntry('alpha', 'command', '/a1'),
+                    new RouteEntry('alpha', 'command', '/a2'),
                     new RouteEntry('beta', 'telegram.message', 'b1'),
                 ]);
             }
@@ -87,16 +85,14 @@ final class ModuleDiagnosticsTest extends TestCase
 
     public function test_missing_database_tables_degrade_to_unavailable_without_throwing(): void
     {
-        $probe = new class implements ActivationStateProbe
-        {
+        $probe = new class () implements ActivationStateProbe {
             public function isEffectivelyEnabled(string $botId, string $moduleId): bool
             {
                 throw new QueryException('sqlite', 'select 1', [], new PDOException('no such table'));
             }
         };
 
-        $resolver = new class implements RouteResolver
-        {
+        $resolver = new class () implements RouteResolver {
             public function resolve(BotContext $context): RoutingTable
             {
                 throw new QueryException('sqlite', 'select 1', [], new PDOException('no such table'));
@@ -123,7 +119,7 @@ final class ModuleDiagnosticsTest extends TestCase
 
     public function test_metrics_summary_is_included_when_populated(): void
     {
-        $metrics = new EngineMetrics;
+        $metrics = new EngineMetrics();
         $metrics->increment('activation_denied', 3);
         $metrics->observeDurationMs('registry_lookup_ms', 12.4);
 
@@ -134,7 +130,7 @@ final class ModuleDiagnosticsTest extends TestCase
 
     public function test_engine_metrics_counters_accumulate(): void
     {
-        $metrics = new EngineMetrics;
+        $metrics = new EngineMetrics();
         $metrics->increment('activation_denied');
         $metrics->increment('activation_denied');
         $metrics->increment('other');

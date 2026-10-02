@@ -14,7 +14,8 @@ final readonly class RegistryError
         public RegistryErrorCode $code,
         public string $moduleKey,
         public string $message,
-    ) {}
+    ) {
+    }
 
     /** @return array{code: string, module: string, message: string} */
     public function toArray(): array

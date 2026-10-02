@@ -70,7 +70,10 @@ final class TgModulesDiagnoseCommand extends Command
         );
 
         if ($this->option('format') === 'json') {
-            $this->output->writeln(json_encode($diagnostics->toArray($botId), JSON_THROW_ON_ERROR));
+            $payload = $diagnostics->toArray($botId);
+            $payload['env_overrides'] = $this->collectEnvOverrides($result);
+
+            $this->output->writeln(json_encode($payload, JSON_THROW_ON_ERROR));
 
             return self::SUCCESS;
         }
@@ -92,17 +95,54 @@ final class TgModulesDiagnoseCommand extends Command
             return null;
         }
 
-        return new class($reader) implements ActivationStateProbe
-        {
+        return new class ($reader) implements ActivationStateProbe {
             public function __construct(
                 private readonly ModuleActivationReader $reader,
-            ) {}
+            ) {
+            }
 
             public function isEffectivelyEnabled(string $botId, string $moduleId): bool
             {
                 return $this->reader->isEffectivelyEnabled($botId, $moduleId);
             }
         };
+    }
+
+    private function renderEnvOverrides(RegistryResult $result): void
+    {
+        $overrides = $this->collectEnvOverrides($result);
+
+        if ($overrides !== []) {
+            $this->newLine();
+            $this->info('Env overrides (differ from config):');
+            $this->table(['Module', 'Config', 'Env Value', 'Effective'], $overrides);
+        }
+    }
+
+    /**
+     * @return list<array{0: string, 1: string, 2: string, 3: string}>
+     */
+    private function collectEnvOverrides(RegistryResult $result): array
+    {
+        $overrides = [];
+        foreach ($result->registry->all() as $definition) {
+            $envKey = 'TG_MODULE_ENABLED_'.$definition->configKey;
+            $envValue = getenv($envKey);
+
+            if ($envValue !== false) {
+                $envBool = filter_var($envValue, FILTER_VALIDATE_BOOLEAN);
+                if ($envBool !== $definition->enabled) {
+                    $overrides[] = [
+                        $definition->id(),
+                        $definition->enabled ? 'true' : 'false',
+                        $envValue,
+                        $envBool ? 'enabled' : 'disabled',
+                    ];
+                }
+            }
+        }
+
+        return $overrides;
     }
 
     /**
@@ -149,6 +189,8 @@ final class TgModulesDiagnoseCommand extends Command
         }
 
         $this->table($headers, $rows);
+
+        $this->renderEnvOverrides($result);
 
         if (isset($payload['bot'])) {
             $bot = $payload['bot'];

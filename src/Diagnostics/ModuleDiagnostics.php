@@ -35,7 +35,8 @@ final readonly class ModuleDiagnostics
         private ?ActivationStateProbe $activationProbe = null,
         private ?RouteResolver $routeResolver = null,
         private ?EngineMetrics $metrics = null,
-    ) {}
+    ) {
+    }
 
     /**
      * Build the full diagnostics payload.

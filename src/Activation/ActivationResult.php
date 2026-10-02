@@ -23,7 +23,8 @@ final readonly class ActivationResult
         public int $revision,
         public array $blockers = [],
         public ?ActivationConflict $conflict = null,
-    ) {}
+    ) {
+    }
 
     /** True when the operation persisted a new desired state (revision bumped). */
     public function applied(): bool

@@ -45,13 +45,17 @@ final readonly class TgModuleConfig
      *                             (alias => class) registered by the engine
      * @param  list<class-string|callable>  $exceptionRenderables  exception handler
      *                             renderables registered by the engine
-     * @param  list<string>  $frontendPages  absolute dirs of Inertia page sources the
-     *                             host page generator globs (legacy modules_frontend_pages)
+     * @param  list<string>  $frontendPages  dirs of Inertia page sources the
+     *                             host page generator globs (legacy modules_frontend_pages);
+     *                             resolved relative to $sourcePath when not absolute
      * @param  list<string>  $pageGenerators  Artisan command names invoked by the host
      *                             `modules:pages` shim (legacy modules_page_generators)
      * @param  list<SettingsScreenContribution>  $settingsScreens  settings screen descriptors
      *                             contributed by this module; rendered by Management (web)
      *                             and Menu (Telegram); config-file-based storage
+     * @param  string|null  $sourcePath  absolute path to the module's source root directory;
+     *                             used to resolve relative httpRoutes/frontendPages paths.
+     *                             null = paths are absolute (dev mode default).
      */
     public function __construct(
         public bool $enabled,
@@ -67,5 +71,7 @@ final readonly class TgModuleConfig
         public array $frontendPages = [],
         public array $pageGenerators = [],
         public array $settingsScreens = [],
-    ) {}
+        public ?string $sourcePath = null,
+    ) {
+    }
 }

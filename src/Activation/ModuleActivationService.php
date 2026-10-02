@@ -10,6 +10,7 @@ use BAGArt\TelegramModuleEngine\Events\BotModuleDisabled;
 use BAGArt\TelegramModuleEngine\Events\BotModuleEnabled;
 use BAGArt\TelegramModuleEngine\Registry\EngineModuleRegistry;
 use Illuminate\Database\ConnectionInterface;
+use Illuminate\Database\QueryException;
 
 /**
  * Lifecycle service for bot module activations (doc 40 §5-6: the centralized
@@ -20,21 +21,40 @@ use Illuminate\Database\ConnectionInterface;
  * are values, not exceptions. No Telegram transport, usable from CLI, admin
  * UI, API and tests.
  */
-final class ModuleActivationService
+final class ModuleActivationService implements ModuleActivationWriterContract
 {
     public function __construct(
         private readonly ConnectionInterface $connection,
         private readonly EngineModuleRegistry $registry,
         private readonly ModuleActivationReader $activations,
         private readonly ?EngineMetrics $metrics = null,
-    ) {}
+    ) {
+    }
+
+    /**
+     * Narrow writer entry used by EngineSettingsWriter: flips enabled state
+     * without exposing the full enable/disable result surface. No-op when
+     * $botId is null (platform-level scope has no activation row).
+     */
+    public function setEnabled(string $moduleId, ?string $botId, bool $enabled, ?string $actorId = null, ?string $actorType = null): void
+    {
+        if ($botId === null) {
+            return;
+        }
+
+        if ($enabled) {
+            $this->enable($botId, $moduleId, null, $actorId, $actorType);
+        } else {
+            $this->disable($botId, $moduleId, null, $actorId, $actorType);
+        }
+    }
 
     /**
      * Enable a module for a bot. Validates platform registration and required
      * dependencies BEFORE persisting (doc 38 §47: validate → persist); the
      * second identical call is a no-op without a revision bump.
      */
-    public function enable(string $botId, string $moduleId, ?int $expectedRevision = null): ActivationResult
+    public function enable(string $botId, string $moduleId, ?int $expectedRevision = null, ?string $actorId = null, ?string $actorType = null): ActivationResult
     {
         $definition = $this->registry->get($moduleId);
         if ($definition === null || ! $definition->enabled) {
@@ -43,23 +63,14 @@ final class ModuleActivationService
             return $this->notRegistered($botId, $moduleId);
         }
 
-        $blockers = $this->dependencyBlockers($botId, $definition);
-        if ($blockers !== []) {
-            $this->metrics?->increment('activation_denied');
-
-            return new ActivationResult(
-                ActivationOutcome::Blocked,
-                $this->currentRevision($botId, $moduleId),
-                blockers: $blockers,
-            );
-        }
-
         return $this->connection->transaction(
             fn (): ActivationResult => $this->mutate(
                 $botId,
                 $moduleId,
                 ModuleActivationReader::STATUS_ENABLED,
                 $expectedRevision,
+                $actorId,
+                $actorType,
             ),
         );
     }
@@ -68,7 +79,7 @@ final class ModuleActivationService
      * Disable a module for a bot. Never deletes the binding or any
      * configuration (doc 40 §6); repeated calls are no-ops.
      */
-    public function disable(string $botId, string $moduleId, ?int $expectedRevision = null): ActivationResult
+    public function disable(string $botId, string $moduleId, ?int $expectedRevision = null, ?string $actorId = null, ?string $actorType = null): ActivationResult
     {
         return $this->connection->transaction(
             fn (): ActivationResult => $this->mutate(
@@ -76,19 +87,40 @@ final class ModuleActivationService
                 $moduleId,
                 ModuleActivationReader::STATUS_DISABLED,
                 $expectedRevision,
+                $actorId,
+                $actorType,
             ),
         );
     }
 
     /** Shared write path for enable/disable with optimistic locking. */
-    private function mutate(string $botId, string $moduleId, string $status, ?int $expectedRevision): ActivationResult
+    private function mutate(string $botId, string $moduleId, string $status, ?int $expectedRevision, ?string $actorId = null, ?string $actorType = null): ActivationResult
     {
         $row = $this->activations->rowFor($botId, $moduleId);
         $target = $status === ModuleActivationReader::STATUS_ENABLED
             ? ActivationOutcome::Enabled
             : ActivationOutcome::Disabled;
 
-        // Idempotency first: an already-satisfied desired state is a no-op
+        // Dependencies must be validated before the idempotency guard so
+        // that re-enabling an already-enabled module whose dependency was
+        // concurrently disabled returns Blocked, not AlreadyEnabled.
+        if ($status === ModuleActivationReader::STATUS_ENABLED) {
+            $definition = $this->registry->get($moduleId);
+            if ($definition !== null) {
+                $blockers = $this->dependencyBlockers($botId, $definition);
+                if ($blockers !== []) {
+                    $this->metrics?->increment('activation_denied');
+
+                    return new ActivationResult(
+                        ActivationOutcome::Blocked,
+                        $this->currentRevision($botId, $moduleId),
+                        blockers: $blockers,
+                    );
+                }
+            }
+        }
+
+        // Idempotency: an already-satisfied desired state is a no-op
         // with no revision bump, even when expectedRevision is supplied.
         if ($row !== null && $row->status === $status) {
             return new ActivationResult($target === ActivationOutcome::Enabled
@@ -117,18 +149,49 @@ final class ModuleActivationService
         }
 
         if ($row === null) {
-            $this->connection->table($this->activations->table())->insert([
-                'bot_id' => $botId,
-                'module_id' => $moduleId,
-                'status' => $status,
-                'revision' => 1,
-                'created_at' => now(),
-                'updated_at' => now(),
-            ]);
+            try {
+                $this->connection->table($this->activations->table())->insert([
+                    'bot_id' => $botId,
+                    'module_id' => $moduleId,
+                    'status' => $status,
+                    'revision' => 1,
+                    'created_at' => now(),
+                    'updated_at' => now(),
+                ]);
+            } catch (QueryException $e) {
+                if ($e->getCode() !== '23505') {
+                    throw $e;
+                }
 
-            $this->dispatchEvent($status, $botId, $moduleId, 1);
+                $row = $this->activations->rowFor($botId, $moduleId);
+                if ($row === null) {
+                    throw $e;
+                }
 
-            return new ActivationResult($target, 1);
+                if ($row->status === $status) {
+                    return new ActivationResult(
+                        $target === ActivationOutcome::Enabled
+                            ? ActivationOutcome::AlreadyEnabled
+                            : ActivationOutcome::AlreadyDisabled,
+                        (int) $row->revision,
+                    );
+                }
+
+                $currentRevision = (int) $row->revision;
+                if ($expectedRevision !== null && $currentRevision !== $expectedRevision) {
+                    return new ActivationResult(
+                        ActivationOutcome::ConcurrentModification,
+                        $currentRevision,
+                        conflict: new ActivationConflict($expectedRevision, $currentRevision),
+                    );
+                }
+            }
+
+            if ($row === null) {
+                $this->dispatchEvent($status, $botId, $moduleId, 1, $actorId, $actorType);
+
+                return new ActivationResult($target, 1);
+            }
         }
 
         $affected = $this->connection->table($this->activations->table())
@@ -147,7 +210,7 @@ final class ModuleActivationService
         }
 
         $newRevision = $currentRevision + 1;
-        $this->dispatchEvent($status, $botId, $moduleId, $newRevision);
+        $this->dispatchEvent($status, $botId, $moduleId, $newRevision, $actorId, $actorType);
 
         return new ActivationResult($target, $newRevision);
     }
@@ -227,11 +290,11 @@ final class ModuleActivationService
         return $row === null ? 0 : (int) $row->revision;
     }
 
-    private function dispatchEvent(string $status, string $botId, string $moduleId, int $revision): void
+    private function dispatchEvent(string $status, string $botId, string $moduleId, int $revision, ?string $actorId = null, ?string $actorType = null): void
     {
         $event = $status === ModuleActivationReader::STATUS_ENABLED
-            ? new BotModuleEnabled($botId, $moduleId, $revision)
-            : new BotModuleDisabled($botId, $moduleId, $revision);
+            ? new BotModuleEnabled($botId, $moduleId, $revision, $actorId, $actorType)
+            : new BotModuleDisabled($botId, $moduleId, $revision, $actorId, $actorType);
 
         event($event);
     }

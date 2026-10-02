@@ -16,5 +16,6 @@ final readonly class ActivationBlocker
         public ActivationErrorCode $reason,
         /** Human-readable diagnostic, safe for admin UI rendering. */
         public string $message,
-    ) {}
+    ) {
+    }
 }

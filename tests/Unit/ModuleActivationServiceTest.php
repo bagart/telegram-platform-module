@@ -8,11 +8,15 @@ use BAGArt\TelegramModuleEngine\Activation\ActivationErrorCode;
 use BAGArt\TelegramModuleEngine\Activation\ActivationOutcome;
 use BAGArt\TelegramModuleEngine\Activation\ModuleActivationReader;
 use BAGArt\TelegramModuleEngine\Activation\ModuleActivationService;
+use BAGArt\TelegramModuleEngine\Events\BotModuleDisabled;
+use BAGArt\TelegramModuleEngine\Events\BotModuleEnabled;
 use BAGArt\TelegramModuleEngine\Registry\EngineModuleRegistry;
 use BAGArt\TelegramModuleEngine\Tests\Fixtures\CinemaModule;
 use BAGArt\TelegramModuleEngine\Tests\Fixtures\DefaultOffModule;
 use BAGArt\TelegramModuleEngine\Tests\Fixtures\MenuModule;
 use BAGArt\TelegramModuleEngine\Tests\Fixtures\TestModule;
+use Illuminate\Container\Container;
+use Illuminate\Events\Dispatcher;
 
 final class ModuleActivationServiceTest extends EngineSqliteTestCase
 {
@@ -172,6 +176,153 @@ final class ModuleActivationServiceTest extends EngineSqliteTestCase
         self::assertNotContains(DefaultOffModule::ID, $reader->activeModuleIds('bot-legacy'));
     }
 
+    public function test_insert_race_returns_already_enabled_when_concurrent_row_matches(): void
+    {
+        $service = $this->service();
+
+        // Simulate a concurrent inserter: insert the row before enable() runs.
+        $this->db->table('bot_module_activations')->insert([
+            'bot_id' => 'bot-1',
+            'module_id' => TestModule::ID,
+            'status' => 'enabled',
+            'revision' => 1,
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        // enable() will try INSERT → unique violation → re-read → already enabled.
+        $result = $service->enable('bot-1', TestModule::ID);
+
+        self::assertSame(ActivationOutcome::AlreadyEnabled, $result->outcome);
+        self::assertSame(1, $result->revision);
+        self::assertFalse($result->applied());
+    }
+
+    public function test_insert_race_falls_through_to_update_when_status_differs(): void
+    {
+        $service = $this->service();
+
+        // Simulate a concurrent inserter that inserted with DISABLED status.
+        $this->db->table('bot_module_activations')->insert([
+            'bot_id' => 'bot-1',
+            'module_id' => TestModule::ID,
+            'status' => 'disabled',
+            'revision' => 1,
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        // enable() will try INSERT → unique violation → re-read → status differs
+        // → falls through to the update path.
+        $result = $service->enable('bot-1', TestModule::ID);
+
+        self::assertSame(ActivationOutcome::Enabled, $result->outcome);
+        self::assertSame(2, $result->revision);
+        self::assertTrue($result->applied());
+    }
+
+    public function test_dependency_check_inside_transaction_blocks_when_dependency_disabled_concurrently(): void
+    {
+        $service = $this->service();
+
+        // cinema depends on menu; enable menu first, then cinema.
+        $service->enable('bot-1', MenuModule::ID);
+        $service->enable('bot-1', CinemaModule::ID);
+
+        // Disable menu — now cinema's dependency is gone.
+        $service->disable('bot-1', MenuModule::ID);
+
+        // Re-enable cinema: dependency check inside transaction must block.
+        $result = $service->enable('bot-1', CinemaModule::ID);
+
+        self::assertSame(ActivationOutcome::Blocked, $result->outcome);
+        self::assertSame(MenuModule::ID, $result->blockers[0]->moduleId);
+        self::assertSame(ActivationErrorCode::DependencyDisabled, $result->blockers[0]->reason);
+    }
+
+    public function test_enable_dispatches_event_with_actor_info(): void
+    {
+        $events = [];
+        $dispatcher = $this->recordingDispatcher($events);
+        $service = $this->serviceWithDispatcher($dispatcher);
+
+        $result = $service->enable('bot-1', TestModule::ID, actorId: 'admin-user', actorType: 'user');
+
+        self::assertSame(ActivationOutcome::Enabled, $result->outcome);
+
+        $fired = array_filter($events, static fn (mixed $e): bool => $e instanceof BotModuleEnabled);
+        self::assertNotEmpty($fired);
+        $event = array_values($fired)[0];
+        self::assertSame('bot-1', $event->botId);
+        self::assertSame(TestModule::ID, $event->moduleId);
+        self::assertSame('admin-user', $event->actorId);
+        self::assertSame('user', $event->actorType);
+    }
+
+    public function test_disable_dispatches_event_with_actor_info(): void
+    {
+        $events = [];
+        $dispatcher = $this->recordingDispatcher($events);
+        $service = $this->serviceWithDispatcher($dispatcher);
+
+        $service->enable('bot-1', TestModule::ID);
+        $result = $service->disable('bot-1', TestModule::ID, actorId: 'bot-owner', actorType: 'owner');
+
+        self::assertSame(ActivationOutcome::Disabled, $result->outcome);
+
+        $fired = array_filter($events, static fn (mixed $e): bool => $e instanceof BotModuleDisabled);
+        self::assertNotEmpty($fired);
+        $event = array_values($fired)[0];
+        self::assertSame('bot-1', $event->botId);
+        self::assertSame(TestModule::ID, $event->moduleId);
+        self::assertSame('bot-owner', $event->actorId);
+        self::assertSame('owner', $event->actorType);
+    }
+
+    public function test_enable_event_without_actor_has_null_actor_fields(): void
+    {
+        $events = [];
+        $dispatcher = $this->recordingDispatcher($events);
+        $service = $this->serviceWithDispatcher($dispatcher);
+
+        $service->enable('bot-1', TestModule::ID);
+
+        $fired = array_filter($events, static fn (mixed $e): bool => $e instanceof BotModuleEnabled);
+        self::assertNotEmpty($fired);
+        $event = array_values($fired)[0];
+        self::assertNull($event->actorId);
+        self::assertNull($event->actorType);
+    }
+
+    public function test_disable_event_without_actor_has_null_actor_fields(): void
+    {
+        $events = [];
+        $dispatcher = $this->recordingDispatcher($events);
+        $service = $this->serviceWithDispatcher($dispatcher);
+
+        $service->enable('bot-1', TestModule::ID);
+        $service->disable('bot-1', TestModule::ID);
+
+        $fired = array_filter($events, static fn (mixed $e): bool => $e instanceof BotModuleDisabled);
+        self::assertNotEmpty($fired);
+        $event = array_values($fired)[0];
+        self::assertNull($event->actorId);
+        self::assertNull($event->actorType);
+    }
+
+    public function test_enable_idempotent_does_not_dispatch_event(): void
+    {
+        $events = [];
+        $dispatcher = $this->recordingDispatcher($events);
+        $service = $this->serviceWithDispatcher($dispatcher);
+
+        $service->enable('bot-1', TestModule::ID);
+        $service->enable('bot-1', TestModule::ID);
+
+        $enabledEvents = array_filter($events, static fn (mixed $e): bool => $e instanceof BotModuleEnabled);
+        self::assertCount(1, $enabledEvents);
+    }
+
     private function service(): ModuleActivationService
     {
         $registry = $this->registry([
@@ -180,6 +331,38 @@ final class ModuleActivationServiceTest extends EngineSqliteTestCase
             CinemaModule::class => true,
             DefaultOffModule::class => true,
         ]);
+
+        return new ModuleActivationService($this->db, $registry, $this->reader($registry));
+    }
+
+    /**
+     * @param  array<array-key, object>  $events  populated by reference
+     */
+    private function recordingDispatcher(array &$events): Dispatcher
+    {
+        $container = Container::getInstance();
+        $dispatcher = new Dispatcher($container);
+        $dispatcher->listen(BotModuleEnabled::class, static function (BotModuleEnabled $event) use (&$events): void {
+            $events[] = $event;
+        });
+        $dispatcher->listen(BotModuleDisabled::class, static function (BotModuleDisabled $event) use (&$events): void {
+            $events[] = $event;
+        });
+
+        return $dispatcher;
+    }
+
+    private function serviceWithDispatcher(Dispatcher $dispatcher): ModuleActivationService
+    {
+        $registry = $this->registry([
+            TestModule::class => true,
+            MenuModule::class => true,
+            CinemaModule::class => true,
+            DefaultOffModule::class => true,
+        ]);
+
+        // Temporarily replace the events binding so event() dispatches through our recording dispatcher
+        Container::getInstance()->instance('events', $dispatcher);
 
         return new ModuleActivationService($this->db, $registry, $this->reader($registry));
     }

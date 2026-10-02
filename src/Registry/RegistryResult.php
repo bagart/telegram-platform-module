@@ -18,7 +18,8 @@ final readonly class RegistryResult
     public function __construct(
         public EngineModuleRegistry $registry,
         public array $errors,
-    ) {}
+    ) {
+    }
 
     public function isValid(): bool
     {

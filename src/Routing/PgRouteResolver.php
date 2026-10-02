@@ -7,6 +7,7 @@ namespace BAGArt\TelegramModuleEngine\Routing;
 use BAGArt\TelegramModuleEngine\Activation\ModuleActivationReader;
 use BAGArt\TelegramModuleEngine\Diagnostics\EngineMetrics;
 use BAGArt\TelegramModuleEngine\Tenancy\BotContext;
+use Illuminate\Contracts\Cache\Repository as CacheRepository;
 use Illuminate\Database\ConnectionInterface;
 
 /**
@@ -20,12 +21,16 @@ use Illuminate\Database\ConnectionInterface;
  */
 final class PgRouteResolver implements RouteResolver
 {
+    private const float CACHE_TTL_SECONDS = 30.0;
+
     public function __construct(
         private readonly ConnectionInterface $connection,
         private readonly ModuleActivationReader $activations,
+        private readonly CacheRepository $cache,
         private readonly string $table = 'bot_module_routes',
         private readonly ?EngineMetrics $metrics = null,
-    ) {}
+    ) {
+    }
 
     public function resolve(BotContext $context): RoutingTable
     {
@@ -38,15 +43,32 @@ final class PgRouteResolver implements RouteResolver
         }
     }
 
+    public function invalidateBot(string $botId): void
+    {
+        $this->cache->forget('tg-routes:'.$botId);
+    }
+
     private function doResolve(BotContext $context): RoutingTable
+    {
+        $cacheKey = 'tg-routes:'.$context->botId;
+
+        return $this->cache->remember($cacheKey, self::CACHE_TTL_SECONDS, function () use ($context): RoutingTable {
+            return $this->loadFromDatabase($context);
+        });
+    }
+
+    private function loadFromDatabase(BotContext $context): RoutingTable
     {
         $active = $this->activations->activeModuleIds($context->botId);
 
-        $rows = $this->connection->table($this->table)
-            ->where('bot_id', $context->botId)
-            ->orderByDesc('priority')
-            ->orderBy('entry_key')
-            ->get();
+        $rows = $this->connection->transaction(function () use ($context) {
+            return $this->connection->table($this->table)
+                ->where('bot_id', $context->botId)
+                ->orderByDesc('priority')
+                ->orderBy('entry_key')
+                ->lockForUpdate()
+                ->get();
+        });
 
         $entries = [];
         foreach ($rows as $row) {

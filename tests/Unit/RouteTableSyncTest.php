@@ -143,5 +143,56 @@ final class RouteTableSyncTest extends EngineSqliteTestCase
         self::assertCount(2, $diff['stale']);
         self::assertSame(3, $this->db->table('bot_module_routes')->count());
     }
-}
 
+    public function test_sync_after_all_modules_disabled_removes_all_routes(): void
+    {
+        $sync = $this->makeSync();
+        $this->service->enable('bot-1', 'menu');
+        $sync->syncForBot('bot-1');
+
+        // 3 routes written (2 menu + 1 cinema default-enabled)
+        self::assertSame(3, $this->db->table('bot_module_routes')->where('bot_id', 'bot-1')->count());
+
+        // Disable all: menu explicitly, cinema is default-enabled but
+        // we have no explicit disable row for it. Cinema stays active
+        // via its descriptor default, so only menu routes are removed.
+        $this->service->disable('bot-1', 'menu');
+        $result = $sync->syncForBot('bot-1');
+
+        self::assertSame(2, $result['removed']);
+        self::assertSame(1, $this->db->table('bot_module_routes')->where('bot_id', 'bot-1')->count());
+
+        // The remaining route is cinema (default-enabled, not explicitly disabled)
+        $remaining = $this->db->table('bot_module_routes')
+            ->where('bot_id', 'bot-1')
+            ->pluck('module_id')
+            ->all();
+        self::assertSame(['cinema'], $remaining);
+    }
+
+    public function test_sync_after_full_disable_removes_all_when_no_default_enabled(): void
+    {
+        // Build a registry with only menu (defaultEnabled = false) so there
+        // are no default-enabled modules to keep routes alive.
+        $registry = new EngineModuleRegistry([
+            $this->definitionWithRoutes('menu', MenuModule::class, [
+                new RouteDeclaration('command', '/menu'),
+                new RouteDeclaration('command', '/menu_settings', priority: 10),
+            ]),
+        ]);
+        $reader = new ModuleActivationReader($this->db, $registry);
+        $service = new ModuleActivationService($this->db, $registry, $reader);
+        $sync = new RouteTableSync($this->db, $reader, $registry);
+
+        $service->enable('bot-1', 'menu');
+        $sync->syncForBot('bot-1');
+
+        self::assertSame(2, $this->db->table('bot_module_routes')->where('bot_id', 'bot-1')->count());
+
+        $service->disable('bot-1', 'menu');
+        $result = $sync->syncForBot('bot-1');
+
+        self::assertSame(2, $result['removed']);
+        self::assertSame(0, $this->db->table('bot_module_routes')->where('bot_id', 'bot-1')->count());
+    }
+}

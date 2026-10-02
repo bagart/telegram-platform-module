@@ -12,6 +12,8 @@ use BAGArt\TelegramModuleEngine\Tenancy\BotContext;
 use BAGArt\TelegramModuleEngine\Tests\Fixtures\DefaultOffModule;
 use BAGArt\TelegramModuleEngine\Tests\Fixtures\MenuModule;
 use BAGArt\TelegramModuleEngine\Tests\Fixtures\TestModule;
+use Illuminate\Cache\ArrayStore;
+use Illuminate\Cache\Repository;
 
 final class PgRouteResolverTest extends EngineSqliteTestCase
 {
@@ -27,6 +29,7 @@ final class PgRouteResolverTest extends EngineSqliteTestCase
         self::assertSame([MenuModule::ID, TestModule::ID], $allOn->moduleIds());
 
         $service->disable('bot-1', MenuModule::ID);
+        $resolver->invalidateBot('bot-1');
 
         $afterDisable = $resolver->resolve(BotContext::forBot('bot-1'));
         self::assertSame([TestModule::ID], $afterDisable->moduleIds());
@@ -82,7 +85,7 @@ final class PgRouteResolverTest extends EngineSqliteTestCase
             $entries,
         ));
         self::assertSame(['kind' => 'special'], $entries[2]->payload);
-        self::assertSame('telegram.command', $entries[0]->entryType);
+        self::assertSame('command', $entries[0]->entryType);
         self::assertSame(TestModule::ID, $entries[0]->moduleId);
     }
 
@@ -113,6 +116,10 @@ final class PgRouteResolverTest extends EngineSqliteTestCase
             DefaultOffModule::class => true,
         ]);
 
-        return new PgRouteResolver($this->db, new ModuleActivationReader($this->db, $registry));
+        return new PgRouteResolver(
+            $this->db,
+            new ModuleActivationReader($this->db, $registry),
+            new Repository(new ArrayStore()),
+        );
     }
 }

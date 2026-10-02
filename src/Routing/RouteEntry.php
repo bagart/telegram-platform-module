@@ -13,7 +13,7 @@ final readonly class RouteEntry
 {
     /**
      * @param  string  $moduleId  owning module (stable logical id)
-     * @param  string  $entryType  typed entry kind, e.g. "telegram.command"
+     * @param  string  $entryType  typed entry kind, e.g. "command", "callback"
      * @param  string  $entryKey  dispatch key within the type, e.g. "/start"
      * @param  int  $priority  secondary ordering hint; dependencies matter more
      * @param  array<string, mixed>|null  $payload  opaque dispatcher payload
@@ -24,5 +24,6 @@ final readonly class RouteEntry
         public string $entryKey,
         public int $priority = 0,
         public ?array $payload = null,
-    ) {}
+    ) {
+    }
 }

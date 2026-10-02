@@ -14,5 +14,6 @@ final readonly class ActivationConflict
     public function __construct(
         public int $expectedRevision,
         public int $currentRevision,
-    ) {}
+    ) {
+    }
 }
