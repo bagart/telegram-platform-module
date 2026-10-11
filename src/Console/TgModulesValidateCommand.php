@@ -22,7 +22,6 @@ final class TgModulesValidateCommand extends Command
         $result = $this->laravel->make(ModuleRegistryBuilder::class)->build();
 
         $errors = [];
-        $warnings = [];
         foreach ($result->errors as $error) {
             $errors[] = [$error->code->value, $error->moduleKey, $error->message];
         }
@@ -54,10 +53,10 @@ final class TgModulesValidateCommand extends Command
             ];
         }
 
-        // Report-only by decision (Q7 wiring b): callback findings warn and
-        // never enter $errors, so they cannot flip the exit code yet.
+        // Blocking since the W-Q2 flip (warn-mode observed green in CI):
+        // non-namespaced callback declarations are validation errors.
         foreach (CallbackPrefixInspector::violations($result->registry) as $violation) {
-            $warnings[] = [
+            $errors[] = [
                 RegistryErrorCode::CallbackPrefixInvalid->value,
                 $violation['module'],
                 sprintf(
@@ -66,10 +65,6 @@ final class TgModulesValidateCommand extends Command
                     $violation['module'],
                 ),
             ];
-        }
-
-        foreach ($warnings as [$code, $moduleKey, $message]) {
-            $this->warn(sprintf('[%s] %s: %s', $code, $moduleKey, $message));
         }
 
         if ($errors === []) {

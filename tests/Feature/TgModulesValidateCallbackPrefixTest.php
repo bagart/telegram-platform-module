@@ -13,9 +13,10 @@ use Tests\TestCase;
 
 /**
  * The callback-namespacing rule of `tg:modules:validate` (W-Q2, Q2/Q7): it
- * ships report-only, so non-conforming declarations warn without failing the
- * command, and the current registry must stay green (0 declared callback rows
- * today plus the grandfathered legacy namespaces).
+ * is blocking since the flip (warn-mode was observed green in CI), so
+ * non-conforming declarations fail the command, while the current registry
+ * stays green (0 declared callback rows today plus the grandfathered legacy
+ * namespaces).
  */
 final class TgModulesValidateCallbackPrefixTest extends TestCase
 {
@@ -29,7 +30,7 @@ final class TgModulesValidateCallbackPrefixTest extends TestCase
         self::assertStringNotContainsString('[CALLBACK_PREFIX_INVALID]', $output);
     }
 
-    public function testNonConformingDeclarationWarnsWithoutFailingInReportOnlyMode(): void
+    public function testNonConformingDeclarationFailsValidationAfterTheBlockingFlip(): void
     {
         $this->app->instance(ModuleRegistryBuilder::class, new ModuleRegistryBuilder([
             'strict' => false,
@@ -45,21 +46,8 @@ final class TgModulesValidateCallbackPrefixTest extends TestCase
         $exit = Artisan::call('tg:modules:validate');
         $output = Artisan::output();
 
-        self::assertSame(0, $exit, $output);
+        self::assertSame(1, $exit, $output);
         self::assertStringContainsString('[CALLBACK_PREFIX_INVALID]', $output);
         self::assertStringContainsString('callback route key "settings"', $output);
-    }
-
-    /**
-     * Post-flip case: once the warn-mode merge is observed green in CI, the
-     * findings move into the $errors path — unskip and restore the body
-     * (inject the same `settings` declaration, assert exit 1 plus the
-     * [CALLBACK_PREFIX_INVALID] error line).
-     */
-    public function testNonConformingDeclarationFailsValidationAfterTheBlockingFlip(): void
-    {
-        $this->markTestSkipped(
-            'Report-only until the warn-mode merge is observed green in CI; unskip with the blocking flip (W-Q2 checklist).'
-        );
     }
 }

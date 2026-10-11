@@ -41,15 +41,13 @@ Modules declare `sourcePath` (nullable string) on `TgModuleConfig`/`TgModuleDefi
 
 - `tg:modules:validate` gained a callback-namespacing rule (Q2 option 2): `CallbackPrefixInspector` grammar over `RouteDeclaration('callback', …)` rows only — key must be `<module>:<action>`. Validation-only: no runtime change, no grammar migration.
 - Grandfather list `GRANDFATHERED = ['wsi','wsa','sm','tv','tc','nt:','m:']` (7 legacy namespaces, owner/audit note cites each source constant; compliant baseline `antispam:captcha:`). Non-conforming declarations fail; grandfathered tokens pass; the list doubles as the migration worklist.
-- Enforcement posture (Q7 option 2 + wiring (b)): report-only first — findings land in `$warnings` via `TgModulesValidateCommand`'s warn phase, exit path untouched, so the rule cannot flip exit codes. Flip to blocking = move `$warnings` findings into `$errors` + unskip the post-flip placeholder test; the venue is W-D1's repaired `module-validation.yml` validate step (R3), never `bin/baseline-check`.
+- Enforcement posture (Q7 option 2 + wiring (b)): shipped report-only first (findings in `$warnings`, exit path untouched), then **flipped to blocking 2026-10-11** — the warn-mode merge was observed green in CI, findings now enter `$errors` in `TgModulesValidateCommand` and the post-flip test carries the exit-1 body. Venue: W-D1's repaired `module-validation.yml` validate step (R3), never `bin/baseline-check`.
 - "Blocking" = red job on path-matching runs only (repo rulesets `[]`, `main` unprotected); a required-check ruleset is the operational follow-up.
 - Day-one green by construction: 0 `type:'callback'` rows exist today; runtime `support()` strings stay outside the rule's sight (no callback inventory). Proxy's emitted-but-unregistered `wizard:*` payloads are invisible to a declaration-scoped rule.
-- Evidence: `CallbackPrefixInspectorTest` (4) + `TgModulesValidateCallbackPrefixTest` (2 passed, 1 skipped placeholder); `php artisan tg:modules:validate` exit 0 before and after.
+- Evidence: `CallbackPrefixInspectorTest` (4) + `TgModulesValidateCallbackPrefixTest` (2 passed, no skip); `php artisan tg:modules:validate` exit 0 on HEAD.
 
-### Warn-mode semantics (red job ≠ merge gate, until flip)
+### Warn-mode semantics (red job ≠ merge gate) — SUPERSEDED by the 2026-10-11 flip
 
-- In warn mode, `CALLBACK_PREFIX_INVALID` findings are report-only: they print via the warn channel and never reach `$errors`, so `tg:modules:validate` keeps exit 0.
-- A red `module-validation.yml` job caused only by `CALLBACK_PREFIX_INVALID` is therefore advisory and must NOT block merge until the flip lands; treat it as a finding, not a failure.
-- Flip precondition: the first CI-green warn-mode run observed after merge.
-- Flip mechanics: move the `$warnings` findings into `$errors` in `TgModulesValidateCommand` and unskip `TgModulesValidateCallbackPrefixTest::testNonConformingDeclarationFailsValidationAfterTheBlockingFlip`.
-- After the flip the same red job becomes a genuine blocking signal; this note is superseded by that change.
+- Warn mode (pre-flip): `CALLBACK_PREFIX_INVALID` findings printed via the warn channel and never reached `$errors`, so `tg:modules:validate` kept exit 0; a red `module-validation.yml` job from this rule alone was advisory and must not have blocked merge.
+- Flip precondition (first CI-green warn-mode run) was met 2026-10-11 (`Module Validation` green on `261db42`); flip mechanics executed same day: `$warnings` findings moved into `$errors` (`TgModulesValidateCommand`) and `TgModulesValidateCallbackPrefixTest::testNonConformingDeclarationFailsValidationAfterTheBlockingFlip` unskipped with the exit-1 body.
+- After the flip the same red job is a genuine blocking signal; this note is historical.

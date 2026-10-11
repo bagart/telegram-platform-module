@@ -5,4 +5,4 @@
 
 | Topic | File | Summary |
 |---|---|---|
-| module-engine | [`module-engine.md`](module-engine.md) | Engine model: registry, activation, routing, settings, diagnostics; DeclaredCommandInspector (duplicate-command rule); CallbackPrefixInspector (namespacing, report-only → blocking) |
+| module-engine | [`module-engine.md`](module-engine.md) | Engine model: registry, activation, routing, settings, diagnostics; DeclaredCommandInspector (duplicate-command rule); CallbackPrefixInspector (namespacing, blocking — flipped 2026-10-11) |
