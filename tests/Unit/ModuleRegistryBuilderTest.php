@@ -14,9 +14,11 @@ use BAGArt\TelegramModuleEngine\Tests\Fixtures\Commands\AlphaCommand;
 use BAGArt\TelegramModuleEngine\Tests\Fixtures\Commands\BetaCommand;
 use BAGArt\TelegramModuleEngine\Tests\Fixtures\Commands\NotACommand;
 use BAGArt\TelegramModuleEngine\Tests\Fixtures\IdMismatchModule;
+use BAGArt\TelegramModuleEngine\Tests\Fixtures\MenuModule;
 use BAGArt\TelegramModuleEngine\Tests\Fixtures\NotAModule;
 use BAGArt\TelegramModuleEngine\Tests\Fixtures\TestModule;
 use BAGArt\TelegramModuleEngine\Tests\Fixtures\ThrowingDescriptorModule;
+use BAGArt\TelegramModuleEngine\Tests\Fixtures\UiNoMenuModule;
 use PHPUnit\Framework\TestCase;
 
 final class ModuleRegistryBuilderTest extends TestCase
@@ -231,6 +233,37 @@ final class ModuleRegistryBuilderTest extends TestCase
 
         self::assertTrue($result->isValid());
         self::assertSame(0, $result->registry->count());
+    }
+
+    public function test_ui_module_without_menu_dependency_is_reported(): void
+    {
+        $result = $this->build([
+            'modules' => [
+                UiNoMenuModule::ID => new TgModuleConfig(enabled: true, provider: UiNoMenuModule::class),
+            ],
+        ]);
+
+        self::assertFalse($result->isValid());
+        self::assertSame(RegistryErrorCode::MissingMenuDependency, $result->errors[0]->code);
+        self::assertSame(UiNoMenuModule::ID, $result->errors[0]->moduleKey);
+
+        // degraded mode keeps the module registered: only its UI manifest is affected
+        self::assertNotNull($result->registry->get(UiNoMenuModule::ID));
+    }
+
+    public function test_menu_hub_is_exempt_from_menu_dependency_rule(): void
+    {
+        $result = $this->build([
+            'modules' => [
+                MenuModule::ID => new TgModuleConfig(enabled: true, provider: MenuModule::class),
+            ],
+        ]);
+
+        self::assertTrue($result->isValid(), implode('; ', array_map(
+            static fn ($e) => $e->moduleKey.': '.$e->message,
+            $result->errors,
+        )));
+        self::assertNotNull($result->registry->get(MenuModule::ID));
     }
 
     /**

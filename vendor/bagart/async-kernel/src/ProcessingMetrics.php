@@ -4,10 +4,10 @@ declare(strict_types=1);
 
 namespace BAGArt\AsyncKernel;
 
-use BAGArt\ASKClient\Contracts\Queue\ActivePartitionsContract;
-use BAGArt\ASKClient\Contracts\Queue\ASKQueueAdapterContract;
-use BAGArt\ASKClient\Contracts\Queue\PartitionStreamContract;
-use BAGArt\ASKClient\Contracts\Queue\PendingAckRegistryContract;
+use BAGArt\AskQueue\Contracts\ActivePartitionsContract;
+use BAGArt\AskQueue\Contracts\ASKQueueAdapterContract;
+use BAGArt\AskQueue\Contracts\PartitionStreamContract;
+use BAGArt\AskQueue\Contracts\PendingAckRegistryContract;
 use BAGArt\AsyncKernel\Contracts\MetricsContract;
 
 final class ProcessingMetrics implements MetricsContract

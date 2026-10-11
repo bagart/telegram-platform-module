@@ -4,7 +4,9 @@ declare(strict_types=1);
 
 namespace BAGArt\TelegramModuleEngine\Registry;
 
+use BAGArt\TelegramBot\Modules\TgModuleCapability;
 use BAGArt\TelegramBot\Modules\TgModuleContract;
+use BAGArt\TelegramBot\Modules\TgModuleDescriptor;
 use BAGArt\TelegramModuleEngine\Config\TgModuleConfig;
 use BAGArt\TelegramModuleEngine\Definition\TgModuleDefinition;
 use Illuminate\Console\Command;
@@ -95,6 +97,16 @@ final readonly class ModuleRegistryBuilder
                 continue;
             }
 
+            // Policy error, not a structural one: the module keeps booting in
+            // degraded mode (only its UI manifest gets dropped downstream).
+            if ($this->missesMenuDependency($descriptor)) {
+                $errors[] = new RegistryError(
+                    RegistryErrorCode::MissingMenuDependency,
+                    $moduleKey,
+                    sprintf('module "%s" declares Ui capability without requiresModules menu', $descriptor->id),
+                );
+            }
+
             $commandError = $this->firstInvalidCommand($moduleKey, $entry->commands);
             if ($commandError !== null) {
                 $errors[] = $commandError;
@@ -153,6 +165,18 @@ final readonly class ModuleRegistryBuilder
         }
 
         return new RegistryResult(new EngineModuleRegistry($definitions), $errors);
+    }
+
+    /**
+     * Ui capability requires a `menu` dependency: without it MenuCatalogRefiner
+     * silently drops the module's UI manifest. The hub module itself is exempt
+     * — it cannot depend on itself.
+     */
+    private function missesMenuDependency(TgModuleDescriptor $descriptor): bool
+    {
+        return in_array(TgModuleCapability::Ui, $descriptor->capabilities, true)
+            && ! array_key_exists('menu', $descriptor->requiresModules)
+            && $descriptor->id !== 'menu';
     }
 
     /**

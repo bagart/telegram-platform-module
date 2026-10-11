@@ -288,18 +288,7 @@ final class TelegramModuleEngineServiceProvider extends ServiceProvider
             return;
         }
 
-        // Warn when a UI module does not declare 'menu' in requiresModules.
-        // Without this dependency, MenuCatalogRefiner silently drops its manifest.
-        foreach ($registry->all() as $definition) {
-            $hasUi = in_array(TgModuleCapability::Ui, $definition->descriptor->capabilities, true);
-            $needsMenu = array_key_exists('menu', $definition->descriptor->requiresModules);
-
-            if ($hasUi && ! $needsMenu) {
-                $this->app->make('log')->warning('tg-modules: module declares Ui capability without requiresModules menu — its UI manifest will be silently dropped by MenuCatalogRefiner', [
-                    'moduleId' => $definition->descriptor->id,
-                ]);
-            }
-        }
+        $this->warnUiModulesMissingMenuDependency($registry);
 
         foreach ($registry->httpRoutes() as $routeFile) {
             if (! is_file($routeFile)) {
@@ -343,6 +332,27 @@ final class TelegramModuleEngineServiceProvider extends ServiceProvider
     }
 
     /**
+     * Warns when a UI module does not declare 'menu' in requiresModules —
+     * without that dependency MenuCatalogRefiner silently drops its manifest.
+     * The hub module is exempt: 'menu' cannot depend on itself (mirrors the
+     * MISSING_MENU_DEPENDENCY registry rule).
+     */
+    private function warnUiModulesMissingMenuDependency(EngineModuleRegistry $registry): void
+    {
+        foreach ($registry->all() as $definition) {
+            $hasUi = in_array(TgModuleCapability::Ui, $definition->descriptor->capabilities, true);
+            $needsMenu = array_key_exists('menu', $definition->descriptor->requiresModules);
+            $isHub = $definition->descriptor->id === 'menu';
+
+            if ($hasUi && ! $needsMenu && ! $isHub) {
+                $this->app->make('log')->warning('tg-modules: module declares Ui capability without requiresModules menu — its UI manifest will be silently dropped by MenuCatalogRefiner', [
+                    'moduleId' => $definition->descriptor->id,
+                ]);
+            }
+        }
+    }
+
+    /**
      * Registers module scheduler entries on the console Schedule (see
      * ModuleScheduleRegistrar for the override contract).
      */
@@ -359,9 +369,10 @@ final class TelegramModuleEngineServiceProvider extends ServiceProvider
     /**
      * Dispatch integration (doc 05 decision: the engine is a dumb proxy in
      * the request path). tg_modules.enablement_driver selects who answers the
-     * lib dispatch contract: 'legacy' (default) keeps the management service
-     * over tg_module_enablements; 'engine' swaps in the engine adapter over
-     * bot_module_activations.
+     * lib dispatch contract: 'engine' (shipped default) binds the engine
+     * adapter over bot_module_activations; 'legacy' keeps the management
+     * service over tg_module_enablements — test-fixture support for
+     * unmigrated dev DBs only.
      */
     private function bindDispatchEnablement(): void
     {

@@ -21,6 +21,9 @@ use Throwable;
  * routing entry counts. Degrades gracefully when database tables are missing
  * (states reported as "unavailable"). Exit code 0 even with degraded (non
  * strict) errors; strict registry validation failure exits 5.
+ *
+ * Scope: registry, activations and routing. For enablement-orphan rows and
+ * static descriptor consistency checks see tg:modules:doctor (management).
  */
 final class TgModulesDiagnoseCommand extends Command
 {
@@ -32,7 +35,7 @@ final class TgModulesDiagnoseCommand extends Command
             {--bot= : Bot id to resolve activation state and routing for}
             {--format=text : Output format: text or json}';
 
-    protected $description = 'Diagnose the Telegram Module Engine registry, activations and routing';
+    protected $description = 'Diagnose the Telegram Module Engine registry, activations and routing (enablement/descriptor checks: tg:modules:doctor)';
 
     public function handle(): int
     {

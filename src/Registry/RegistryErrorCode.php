@@ -48,4 +48,10 @@ enum RegistryErrorCode: string
 
     /** duplicate route entry (entry_type, entry_key) across modules */
     case DuplicateRouteEntry = 'DUPLICATE_ROUTE_ENTRY';
+
+    /** Ui-capable descriptor does not declare requiresModules menu (menu hub itself exempt) */
+    case MissingMenuDependency = 'MISSING_MENU_DEPENDENCY';
+
+    /** declared callback route key is neither <module>:<action> nor a grandfathered legacy namespace */
+    case CallbackPrefixInvalid = 'CALLBACK_PREFIX_INVALID';
 }

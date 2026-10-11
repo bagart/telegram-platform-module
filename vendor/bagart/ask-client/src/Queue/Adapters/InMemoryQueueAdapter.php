@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace BAGArt\ASKClient\Queue\Adapters;
 
-use BAGArt\ASKClient\Contracts\Queue\ASKQueueAdapterContract;
+use BAGArt\AskQueue\Contracts\ASKQueueAdapterContract;
 
 final class InMemoryQueueAdapter implements ASKQueueAdapterContract
 {

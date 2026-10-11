@@ -10,6 +10,8 @@ use Illuminate\Console\Command;
 
 /**
  * Control-path CLI for bot-level activation (phase 2 lifecycle ops).
+ * Bot-scoped CAS; for platform/chat scope see tg:module:enable (management
+ * pair, 0/1 exits).
  * Exit codes: 0 = applied or already in target state, 5 = blocked
  * (dependency validation) or stale revision — baseline CLI contract.
  */
@@ -17,7 +19,7 @@ final class TgModulesEnableCommand extends Command
 {
     protected $signature = 'tg:modules:enable {botId : Bot id} {moduleId : Module id from config/tg_modules.php} {--revision= : Expected revision for optimistic locking}';
 
-    protected $description = 'Enable a module for a specific bot (engine activation store)';
+    protected $description = 'Enable a module for a specific bot (engine CAS; for platform/chat scope see tg:module:enable)';
 
     public function handle(ModuleActivationService $activations): int
     {

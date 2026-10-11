@@ -8,13 +8,14 @@ use BAGArt\TelegramModuleEngine\Activation\ModuleActivationService;
 use Illuminate\Console\Command;
 
 /**
- * Disable counterpart of tg:modules:enable.
+ * Disable counterpart of tg:modules:enable. Bot-scoped CAS; for
+ * platform/chat scope see tg:module:disable (management pair, 0/1 exits).
  */
 final class TgModulesDisableCommand extends Command
 {
     protected $signature = 'tg:modules:disable {botId : Bot id} {moduleId : Module id from config/tg_modules.php} {--revision= : Expected revision for optimistic locking}';
 
-    protected $description = 'Disable a module for a specific bot (engine activation store)';
+    protected $description = 'Disable a module for a specific bot (engine CAS; for platform/chat scope see tg:module:disable)';
 
     public function handle(ModuleActivationService $activations): int
     {

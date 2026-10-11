@@ -50,7 +50,7 @@ final class ApiClient implements ApiClientContract
             ASK::sleep((int)ceil($delay * 1_000))->await();
         }
 
-        $promise = $this->transport->requestAsync($request);
+        $promise = $this->transport->request($request);
         $this->rateLimiter->markSent($key);
 
         return $promise;

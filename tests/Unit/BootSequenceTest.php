@@ -6,14 +6,8 @@ namespace BAGArt\TelegramModuleEngine\Tests\Unit;
 
 use BAGArt\TelegramModuleEngine\Config\TgModuleConfig;
 use BAGArt\TelegramModuleEngine\Config\TgModuleSchedule;
-use BAGArt\TelegramModuleEngine\Definition\TgModuleDefinition;
-use BAGArt\TelegramModuleEngine\Registry\EngineModuleRegistry;
 use BAGArt\TelegramModuleEngine\Registry\ModuleRegistryBuilder;
 use BAGArt\TelegramModuleEngine\Registry\ProviderSequence;
-use BAGArt\TelegramModuleEngine\Settings\SettingsDescriptor;
-use BAGArt\TelegramModuleEngine\Settings\SettingsField;
-use BAGArt\TelegramModuleEngine\Settings\SettingsFieldType;
-use BAGArt\TelegramModuleEngine\Settings\SettingsScreenContribution;
 use BAGArt\TelegramModuleEngine\Tests\Fixtures\AntispamModule;
 use BAGArt\TelegramModuleEngine\Tests\Fixtures\MafiaModule;
 use BAGArt\TelegramModuleEngine\Tests\Fixtures\MenuModule;
@@ -28,8 +22,8 @@ use PHPUnit\Framework\TestCase;
  * Integration test: full boot sequence with 8 simulated modules.
  *
  * Verifies that the registry builder resolves all modules, that the
- * provider boot sequence produces a valid ordering, and that settings
- * screen contributions survive the config→definition→registry pipeline.
+ * provider boot sequence produces a valid ordering, and that module
+ * declarations survive the config→definition→registry pipeline.
  */
 final class BootSequenceTest extends TestCase
 {
@@ -85,21 +79,6 @@ final class BootSequenceTest extends TestCase
         self::assertIsArray($sequence);
     }
 
-    public function test_settings_screens_appear_in_registry_for_proxy(): void
-    {
-        $result = (new ModuleRegistryBuilder($this->eightModuleConfig()))->build();
-
-        $proxy = $result->registry->get('proxy');
-        self::assertNotNull($proxy);
-        self::assertCount(1, $proxy->settingsScreens);
-        self::assertSame('proxy.settings', $proxy->settingsScreens[0]->screenId);
-
-        $descriptor = $proxy->settingsScreens[0]->descriptor;
-        self::assertSame('proxy.selection_strategy', $descriptor->fields[0]->fieldId);
-        self::assertSame(SettingsFieldType::Enum, $descriptor->fields[0]->type);
-        self::assertSame('round_robin', $descriptor->fields[0]->default);
-    }
-
     public function test_schedule_entries_declared_by_modules(): void
     {
         $result = (new ModuleRegistryBuilder($this->eightModuleConfig()))->build();
@@ -113,49 +92,6 @@ final class BootSequenceTest extends TestCase
         self::assertArrayHasKey('stt', $schedule);
         self::assertArrayNotHasKey('antispam', $schedule);
         self::assertArrayNotHasKey('nettools', $schedule);
-    }
-
-    public function test_engine_module_registry_settings_screens_accessor(): void
-    {
-        $registry = new EngineModuleRegistry([
-            $this->definitionWithScreen('proxy', [
-                new SettingsScreenContribution(
-                    screenId: 'proxy.settings',
-                    descriptor: new SettingsDescriptor(fields: [
-                        new SettingsField(fieldId: 'proxy.selection_strategy', type: SettingsFieldType::Enum, default: 'round_robin'),
-                    ]),
-                ),
-            ]),
-            $this->definitionWithScreen('antispam', []),
-        ]);
-
-        $proxy = $registry->get('proxy');
-        self::assertNotNull($proxy);
-        self::assertCount(1, $proxy->settingsScreens);
-
-        $antispam = $registry->get('antispam');
-        self::assertNotNull($antispam);
-        self::assertSame([], $antispam->settingsScreens);
-    }
-
-    /**
-     * @param  list<SettingsScreenContribution>  $screens
-     */
-    private function definitionWithScreen(string $id, array $screens): TgModuleDefinition
-    {
-        $providerClass = match ($id) {
-            'antispam' => AntispamModule::class,
-            'proxy' => ProxyModule::class,
-            default => MenuModule::class,
-        };
-
-        return new TgModuleDefinition(
-            configKey: $id,
-            provider: $providerClass,
-            descriptor: $providerClass::descriptor(),
-            enabled: true,
-            settingsScreens: $screens,
-        );
     }
 
     private function eightModuleConfig(): array
@@ -182,21 +118,6 @@ final class BootSequenceTest extends TestCase
                 ]),
                 'proxy' => new TgModuleConfig(enabled: true, provider: ProxyModule::class, schedule: [
                     new TgModuleSchedule(command: 'proxy:lease:reap', expression: '* * * * *'),
-                ], settingsScreens: [
-                    new SettingsScreenContribution(
-                        screenId: 'proxy.settings',
-                        descriptor: new SettingsDescriptor(fields: [
-                            new SettingsField(
-                                fieldId: 'proxy.selection_strategy',
-                                type: SettingsFieldType::Enum,
-                                default: 'round_robin',
-                                options: [
-                                    ['value' => 'round_robin', 'labelKey' => 'proxy::settings.strategy_round_robin'],
-                                    ['value' => 'random', 'labelKey' => 'proxy::settings.strategy_random'],
-                                ],
-                            ),
-                        ]),
-                    ),
                 ]),
             ],
         ];

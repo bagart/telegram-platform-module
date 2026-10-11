@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace BAGArt\TelegramModuleEngine\Tests\Fixtures;
 
+use BAGArt\TelegramBot\Modules\TgModuleCapability;
 use BAGArt\TelegramBot\Modules\TgModuleContract;
 use BAGArt\TelegramBot\Modules\TgModuleDescriptor;
 use BAGArt\TelegramBot\Modules\TgModuleRegistrar;
@@ -11,7 +12,9 @@ use BAGArt\TelegramBot\Modules\TgModuleRegistrar;
 /**
  * Dependency fixture, descriptor defaultEnabled = false. Used both as an
  * explicit-enable target and as a required dependency whose absence must
- * block dependent enables with a structured reason.
+ * block dependent enables with a structured reason. Carries the Ui
+ * capability like the real hub so the menu self-exemption of the
+ * MISSING_MENU_DEPENDENCY rule is exercised by every menu-including build.
  */
 final class MenuModule implements TgModuleContract
 {
@@ -23,6 +26,7 @@ final class MenuModule implements TgModuleContract
             id: self::ID,
             name: 'Menu Module',
             version: '1.0.0',
+            capabilities: [TgModuleCapability::Ui],
             defaultEnabled: false,
         );
     }

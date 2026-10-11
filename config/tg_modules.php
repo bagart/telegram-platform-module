@@ -23,9 +23,11 @@ return [
     'strict' => false,
 
     // Dispatch driver for the lib ModuleEnablementContract (doc 05):
-    // 'legacy' = management service over tg_module_enablements (default),
-    // 'engine' = engine adapter over bot_module_activations.
-    'enablement_driver' => 'legacy',
+    // 'engine' = engine adapter over bot_module_activations (shipped
+    // default); 'legacy' = management service over tg_module_enablements —
+    // test-fixture support for unmigrated dev DBs only (the table is
+    // dropped by migration 2026_09_20_000002).
+    'enablement_driver' => 'engine',
 
     'modules' => [
         //
